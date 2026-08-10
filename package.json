@@ -1,0 +1,22 @@
+{
+  "name": "draft-holdem-lan",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Draft Hold'em — server-authoritative LAN poker game",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "test:ui": "node scripts/ui-smoke.mjs"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
+  }
+}

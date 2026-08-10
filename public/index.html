@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#151126">
+    <meta name="description" content="Draft Hold'em — build the hand, sell the story.">
+    <title>Draft Hold'em</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true">
+      <span class="orb orb-one"></span>
+      <span class="orb orb-two"></span>
+      <span class="noise"></span>
+    </div>
+
+    <header class="topbar">
+      <button class="brand" id="brand-button" type="button" aria-label="Back to home">
+        <span class="brand-mark"><i></i><i></i></span>
+        <span><b>DRAFT</b> HOLD’EM</span>
+      </button>
+      <div class="topbar-center" id="connection-label">
+        <span class="status-dot"></span>
+        <span>Connecting…</span>
+      </div>
+      <div class="topbar-actions">
+        <span class="room-pill hidden" id="room-pill">ROOM <b>—</b></span>
+        <button class="icon-button" id="rules-button" type="button" aria-label="Open game guide" title="How to play">?</button>
+      </div>
+    </header>
+
+    <main id="app">
+      <section class="home-view view" id="home-view">
+        <div class="hero-copy">
+          <div class="eyebrow"><span></span> POKER × SECRET DRAFT</div>
+          <h1>Build the hand.<br><em>Sell the story.</em></h1>
+          <p>Shape your hand through four secret drafts. Manage two resources, read the table, and make your story believable.</p>
+          <div class="feature-row" aria-label="Features">
+            <span><b>2–4</b> players</span>
+            <span><b>4</b> rounds</span>
+            <span><b>LAN</b> private</span>
+          </div>
+        </div>
+
+        <div class="entry-card panel">
+          <div class="entry-header">
+            <span class="mini-card mini-card-back"></span>
+            <span class="mini-card mini-card-front">A<i>♠</i></span>
+            <div>
+              <p class="overline">TAKE A SEAT</p>
+              <h2>Choose your name</h2>
+            </div>
+          </div>
+          <label class="field-label" for="player-name">Display name</label>
+          <input class="text-input" id="player-name" maxlength="20" autocomplete="nickname" placeholder="e.g. River King">
+          <div class="entry-actions">
+            <button class="primary-button" id="create-room-button" type="button">
+              <span>Create room</span><span aria-hidden="true">→</span>
+            </button>
+            <div class="divider"><span>or join with a code</span></div>
+            <div class="join-row">
+              <input class="text-input code-input" id="room-code-input" maxlength="5" autocomplete="off" placeholder="ROOM CODE" aria-label="Room code">
+              <button class="secondary-button" id="join-room-button" type="button">Join room</button>
+            </div>
+          </div>
+          <p class="privacy-note"><span>◆</span> Hidden cards and secret bids stay on the host.</p>
+        </div>
+      </section>
+
+      <section class="lobby-view view hidden" id="lobby-view">
+        <div class="lobby-main panel">
+          <div class="section-heading">
+            <div>
+              <p class="overline">LOBBY</p>
+              <h2>Bring your table together</h2>
+            </div>
+            <div class="code-badge">
+              <span>ROOM CODE</span>
+              <strong id="lobby-code">—</strong>
+              <button id="copy-link-button" type="button">Copy invite</button>
+            </div>
+          </div>
+          <div class="share-callout">
+            <span class="share-icon">⌁</span>
+            <div>
+              <b>Play on the same network</b>
+              <p id="share-address">Share the room code and LAN address shown on the host.</p>
+            </div>
+          </div>
+          <div class="seat-list" id="lobby-seats"></div>
+          <div class="lobby-footer">
+            <button class="ready-button" id="ready-button" type="button"><span class="ready-check">✓</span><span>Ready</span></button>
+            <button class="primary-button start-button" id="start-button" type="button">Start game <span>→</span></button>
+          </div>
+        </div>
+
+        <aside class="settings-panel panel">
+          <div class="section-heading compact">
+            <div>
+              <p class="overline">TABLE SETTINGS</p>
+              <h3>Game setup</h3>
+            </div>
+            <span class="host-only-badge">HOST</span>
+          </div>
+          <div class="setting-grid">
+            <label><span>Starting stack</span><input id="setting-stack" type="number" min="100" max="10000" step="50"></label>
+            <label><span>Draft Token</span><input id="setting-tokens" type="number" min="4" max="50"></label>
+            <label><span>Small Blind</span><input id="setting-small-blind" type="number" min="1" max="500"></label>
+            <label><span>Big Blind</span><input id="setting-big-blind" type="number" min="2" max="1000"></label>
+            <label><span>Draft timer</span><div class="setting-with-unit"><input id="setting-draft-time" type="number" min="10" max="120"><small>sec</small></div></label>
+            <label><span>Bet timer</span><div class="setting-with-unit"><input id="setting-bet-time" type="number" min="10" max="120"><small>sec</small></div></label>
+          </div>
+          <div class="rules-summary">
+            <div><span class="summary-icon cyan">◆</span><p><b>Secret bids</b><small>Every bid is spent</small></p></div>
+            <div><span class="summary-icon red">●</span><p><b>No-limit</b><small>All-in and side pots</small></p></div>
+            <div><span class="summary-icon gold">★</span><p><b>Best 5 of 6</b><small>Scored automatically</small></p></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="game-view view hidden" id="game-view">
+        <div class="game-stage">
+          <div class="round-strip">
+            <div><span id="round-label">ROUND 1 / 4</span><strong id="phase-label">DRAFT PHASE</strong></div>
+            <div class="phase-progress" id="phase-progress" aria-label="Hand progress"></div>
+            <div class="round-tools">
+              <button class="log-toggle-button" id="log-toggle-button" type="button" aria-pressed="false"><span>Hide log</span></button>
+              <div class="turn-timer hidden" id="turn-timer" role="timer" aria-live="off"><span>TIME</span><strong>00:30</strong></div>
+              <div class="pot-compact"><span>POT</span><strong id="pot-label">0</strong><i class="chip-icon gold-chip"></i></div>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <div class="poker-table">
+              <div class="table-rail"></div>
+              <div class="felt-lines" aria-hidden="true"></div>
+              <div class="table-center">
+                <div class="market-title"><span id="market-kicker">CARD MARKET</span><b id="market-instruction">Dealing cards…</b></div>
+                <div class="market-cards" id="market-cards"></div>
+                <div class="draft-order hidden" id="draft-order"></div>
+                <div class="pot-stack" id="pot-stack"><i></i><i></i><i></i><span><small>TOTAL POT</small><b>0</b></span></div>
+              </div>
+              <div class="table-contributions" id="table-contributions" aria-label="Player contributions"></div>
+              <div class="player-seats" id="player-seats"></div>
+            </div>
+          </div>
+
+          <div class="action-dock" id="action-dock"></div>
+        </div>
+
+        <aside class="game-sidebar panel">
+          <div class="sidebar-section">
+            <div class="sidebar-title"><span>ACTION LOG</span></div>
+            <div class="action-log" id="action-log"></div>
+          </div>
+          <div class="sidebar-section pot-section">
+            <div class="sidebar-title"><span>POT</span></div>
+            <div id="pots-list"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <dialog class="rules-dialog" id="rules-dialog">
+      <div class="rules-shell">
+        <article class="rules-content-wrap">
+          <div class="rules-toolbar">
+            <div><span class="overline">PLAYER GUIDE</span><b>Everything you need to play</b></div>
+            <div class="guide-slide-title" id="guide-slide-title">Overview</div>
+            <button class="icon-button close-button" id="close-rules-button" type="button" aria-label="Close guide">×</button>
+          </div>
+          <div class="rules-content" id="rules-content"><div class="loading-rules">Loading guide…</div></div>
+          <div class="guide-slide-controls hidden" id="guide-slide-controls">
+            <button id="guide-prev-button" type="button" aria-label="Previous slide">← <span>Previous</span></button>
+            <div class="guide-slide-dots" id="guide-slide-dots"></div>
+            <span class="guide-slide-count" id="guide-slide-count">1 / 9</span>
+            <button id="guide-next-button" type="button" aria-label="Next slide"><span>Next</span> →</button>
+          </div>
+        </article>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
