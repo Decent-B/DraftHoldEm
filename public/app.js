@@ -20,7 +20,7 @@ const handNames = {
   ONE_PAIR: "One Pair",
   HIGH_CARD: "High Card",
 };
-const avatarColors = ["#7364f2", "#d35c77", "#2aa68e", "#d3923e"];
+const avatarColors = ["#7364f2", "#d35c77", "#2aa68e", "#d3923e", "#438bc7", "#9b63c8"];
 const phaseNames = {
   DRAFT_BIDDING: "DRAFT · SECRET BID",
   DRAFT_PICKING: "DRAFT · PICK A CARD",
@@ -39,6 +39,77 @@ let logHidden = localStorage.getItem("draft-holdem-hide-log") !== "false";
 let previousGameState = null;
 let guideSlides = [];
 let guideSlideIndex = 0;
+const soundSettingsKey = "draft-holdem-sound-settings";
+const audioSources = {
+  music: "/audio/background.mp3",
+  chips: "/audio/placing-chip.mp3",
+  cards: "/audio/placing-card.mp3",
+  allIn: "/audio/all-in.mp3",
+};
+
+function loadSoundSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(soundSettingsKey) || "null");
+    return {
+      music: Math.max(0, Math.min(1, Number(saved?.music ?? 0.25))),
+      effects: Math.max(0, Math.min(1, Number(saved?.effects ?? 0.75))),
+    };
+  } catch {
+    return { music: 0.25, effects: 0.75 };
+  }
+}
+
+const soundSettings = loadSoundSettings();
+const backgroundMusic = new Audio();
+const soundEffects = {
+  chips: new Audio(audioSources.chips),
+  cards: new Audio(audioSources.cards),
+  allIn: new Audio(audioSources.allIn),
+};
+let audioUnlocked = false;
+backgroundMusic.loop = true;
+backgroundMusic.preload = "none";
+backgroundMusic.src = audioSources.music;
+Object.values(soundEffects).forEach((sound) => { sound.preload = "auto"; });
+
+function syncBackgroundMusic() {
+  backgroundMusic.volume = soundSettings.music;
+  if (!audioUnlocked || soundSettings.music === 0) {
+    if (soundSettings.music === 0) backgroundMusic.pause();
+    return;
+  }
+  void backgroundMusic.play().catch(() => {});
+}
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  syncBackgroundMusic();
+}
+
+function playSoundEffect(name) {
+  const sound = soundEffects[name];
+  if (!sound || soundSettings.effects === 0) return;
+  sound.volume = soundSettings.effects;
+  sound.currentTime = 0;
+  void sound.play().catch(() => {});
+}
+
+function updateSoundSettingsUi() {
+  const settings = [["music", "#music-volume", "#music-volume-output"], ["effects", "#effects-volume", "#effects-volume-output"]];
+  for (const [key, inputSelector, outputSelector] of settings) {
+    const percentage = Math.round(soundSettings[key] * 100);
+    $(inputSelector).value = percentage;
+    $(outputSelector).textContent = percentage === 0 ? "MUTED" : `${percentage}%`;
+  }
+}
+
+function updateSoundSetting(key, percentage) {
+  soundSettings[key] = Math.max(0, Math.min(1, percentage / 100));
+  localStorage.setItem(soundSettingsKey, JSON.stringify(soundSettings));
+  updateSoundSettingsUi();
+  if (key === "music") syncBackgroundMusic();
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -99,6 +170,13 @@ function connect() {
       previousGameState = currentState?.mode === "GAME" ? currentState.game : null;
       currentState = message.state;
       render();
+      if (previousGameState
+        && currentState.mode === "GAME"
+        && previousGameState.handNumber === currentState.game.handNumber
+        && previousGameState.phase !== "HAND_COMPLETE"
+        && currentState.game.phase === "HAND_COMPLETE") {
+        playSoundEffect("chips");
+      }
     } else if (message.type === "kicked") {
       localStorage.removeItem(sessionKey(message.roomCode));
       currentState = null;
@@ -159,7 +237,7 @@ function renderLobby(state) {
   $("#share-address").textContent = `${shareOrigin}/?room=${state.roomCode}`;
 
   const seats = [...state.players];
-  while (seats.length < 4) seats.push(null);
+  while (seats.length < 6) seats.push(null);
   $("#lobby-seats").innerHTML = seats.map((player, index) => {
     if (!player) return `<div class="lobby-seat open"><span>＋ OPEN SEAT</span></div>`;
     const readyClass = !player.connected ? "offline" : player.ready ? "ready" : "";
@@ -222,7 +300,38 @@ function relativePosition(seatIndex, viewerSeat, count) {
   if (relative === 0) return "bottom";
   if (count === 2) return "top";
   if (count === 3) return relative === 1 ? "left" : "right";
-  return ["bottom", "left", "top", "right"][relative];
+  if (count === 4) return ["bottom", "left", "top", "right"][relative];
+  if (count === 5) return ["bottom", "lower-left", "upper-left", "upper-right", "lower-right"][relative];
+  return ["bottom", "lower-left", "upper-left", "top", "upper-right", "lower-right"][relative];
+}
+
+function pokerChipPile(amount, { animate = false, className = "" } = {}) {
+  if (amount <= 0) {
+    return `<div class="poker-chip-pile chips empty${className ? ` ${className}` : ""}">
+      <span class="poker-chip-stacks"></span><span class="chip-pile-caption"><b>0</b><small>CHIPS</small></span>
+    </div>`;
+  }
+  const totalChips = Math.min(20, Math.max(1, Math.ceil(Math.log2(amount + 1)) * 2 - 2));
+  const stackCount = Math.ceil(totalChips / 5);
+  const denominations = [1, 5, 25, 100, 500].filter((value) => value <= amount);
+  let chipsLeft = totalChips;
+  const stacks = Array.from({ length: stackCount }, (_, stackIndex) => {
+    const chipCount = Math.min(5, chipsLeft);
+    chipsLeft -= chipCount;
+    const denominationIndex = Math.min(
+      denominations.length - 1,
+      Math.floor(((stackIndex + 1) * denominations.length - 1) / stackCount),
+    );
+    const denomination = denominations[Math.max(0, denominationIndex)] ?? 1;
+    const chips = Array.from({ length: chipCount }, (_, chipIndex) => (
+      `<i style="--chip-index:${chipIndex}" aria-hidden="true"></i>`
+    )).join("");
+    return `<span class="poker-chip-stack denomination-${denomination}" style="--chip-count:${chipCount}" title="${denomination}-chip stack">${chips}</span>`;
+  }).join("");
+  return `<div class="poker-chip-pile chips${animate ? " animate-in" : ""}${className ? ` ${className}` : ""}">
+    <span class="poker-chip-stacks">${stacks}</span>
+    <span class="chip-pile-caption"><b>${escapeHtml(amount)}</b><small>CHIPS</small></span>
+  </div>`;
 }
 
 function renderPlayerSeats(state) {
@@ -244,14 +353,22 @@ function renderPlayerSeats(state) {
       player.seatIndex === game.bigBlindSeatIndex ? '<span class="seat-badge blind">BB</span>' : "",
       player.folded ? '<span class="seat-badge fold">FOLD</span>' : "",
       player.allIn && !player.folded ? '<span class="seat-badge allin">ALL-IN · STILL DRAFTS</span>' : "",
+      player.sittingOut
+        ? `<span class="seat-badge sitout">${game.phase === "HAND_COMPLETE" || !player.inHand ? "SITTING OUT" : "SIT OUT NEXT"}</span>`
+        : "",
+      player.refillCount > 0 ? `<span class="seat-badge refill">REFILL ×${player.refillCount}</span>` : "",
+      game.phase === "HAND_COMPLETE" && Number.isFinite(player.handChipDelta) && player.handChipDelta !== 0
+        ? `<span class="seat-badge chip-delta ${player.handChipDelta > 0 ? "win" : "loss"}">HAND ${player.handChipDelta > 0 ? "+" : ""}${player.handChipDelta}</span>`
+        : "",
     ].join("");
-    const classes = ["player-seat", activeTurn === player.id ? "is-turn" : "", player.folded ? "is-folded" : ""].join(" ");
+    const classes = ["player-seat", activeTurn === player.id ? "is-turn" : "", player.folded ? "is-folded" : "", !player.inHand ? "is-sitting-out" : ""].join(" ");
     return `<div class="${classes}" data-position="${position}" data-player-id="${escapeHtml(player.id)}">
       <div class="seat-badges">${badges}</div>
       <div class="seat-shell">
         <div class="avatar" style="--avatar:${avatarColors[index]}">${escapeHtml(initials(player.name))}</div>
+        <div class="seat-chip-stack">${pokerChipPile(player.chips, { className: "bankroll-pile" })}</div>
         <div><div class="seat-name ${player.id === state.viewerId ? "you" : ""}">${escapeHtml(player.name)}</div>
-          <div class="resource-line"><span>◉ <b>${player.chips}</b></span><span class="token-value">◆ ${player.draftTokens}</span></div>
+          <div class="resource-line"><span class="token-value">◆ ${player.draftTokens}</span></div>
         </div>
       </div>
       <div class="seat-cards">${cards}</div>
@@ -268,6 +385,7 @@ function contributionWasAdded(game, player, key) {
 }
 
 function contributionStack(type, amount, label, animate) {
+  if (type === "chips") return pokerChipPile(amount, { animate });
   return `<div class="contribution-stack ${type}${animate ? " animate-in" : ""}">
     <span class="contribution-pieces"><i></i><i></i><i></i></span><b>${escapeHtml(amount)}</b><small>${escapeHtml(label)}</small>
   </div>`;
@@ -279,7 +397,7 @@ function renderTableContributions(state) {
   const initialSecretBid = game.phase === "DRAFT_BIDDING" && game.draftBidStage === "INITIAL";
   const tieBreakBid = game.phase === "DRAFT_BIDDING" && game.draftBidStage === "TIEBREAK";
 
-  $("#table-contributions").innerHTML = game.players.map((player) => {
+  const contributions = game.players.map((player) => {
     const position = relativePosition(player.seatIndex, viewer.seatIndex, game.players.length);
     const stacks = [];
     const previousPlayer = previousGameState?.players.find((candidate) => candidate.id === player.id);
@@ -313,6 +431,18 @@ function renderTableContributions(state) {
       ? `<div class="table-contribution" data-position="${position}" data-player-id="${escapeHtml(player.id)}">${stacks.join("")}</div>`
       : "";
   }).join("");
+  const showPayout = game.phase === "HAND_COMPLETE"
+    && previousGameState?.handNumber === game.handNumber
+    && previousGameState.phase !== "HAND_COMPLETE";
+  const payoutFlights = showPayout ? game.result.winnerIds.map((playerId, index) => {
+    const winner = game.players.find((player) => player.id === playerId);
+    const position = relativePosition(winner.seatIndex, viewer.seatIndex, game.players.length);
+    const visualAmount = Math.max(1, Math.floor(game.result.amount / game.result.winnerIds.length));
+    return `<div class="winner-chip-flight" data-position="${position}" style="--flight-delay:${index * 0.12}s">
+      ${pokerChipPile(visualAmount, { className: "payout-pile" })}
+    </div>`;
+  }).join("") : "";
+  $("#table-contributions").innerHTML = contributions + payoutFlights;
 }
 
 function marketDescription(game) {
@@ -335,6 +465,9 @@ function renderGame(state) {
   applyLogVisibility();
   const game = state.game;
   const isPicking = game.phase === "DRAFT_PICKING" && game.currentPickerId === state.viewerId;
+  const me = game.players.find((player) => player.id === state.viewerId);
+  $(".poker-table").dataset.playerCount = game.players.length;
+  $(".poker-table").dataset.phase = game.phase;
   $("#round-label").textContent = `ROUND ${game.round} / 4 · HAND ${game.handNumber}`;
   $("#phase-label").textContent = game.phase === "DRAFT_BIDDING" && game.draftBidStage === "TIEBREAK"
     ? "DRAFT · TIE-BREAK"
@@ -344,6 +477,10 @@ function renderGame(state) {
   $("#market-instruction").textContent = marketDescription(game);
   $("#market-kicker").textContent = game.phase === "POKER_BETTING" ? `CURRENT BET · ${game.betting?.currentBet ?? 0}` : "CARD MARKET";
   $("#phase-progress").innerHTML = [1, 2, 3, 4].map((round) => `<i class="${round < game.round ? "done" : round === game.round ? "current" : ""}"></i>`).join("");
+  const seatToggle = $("#seat-toggle-button");
+  seatToggle.textContent = me.sittingOut ? "Sit in next hand" : "Sit out next hand";
+  seatToggle.classList.toggle("active", me.sittingOut);
+  seatToggle.setAttribute("aria-pressed", String(me.sittingOut));
 
   $("#market-cards").innerHTML = game.market.map(({ id, card }) => cardHtml(card, {
     clickableId: isPicking ? id : null,
@@ -389,7 +526,7 @@ function updateTurnTimer() {
   const minutes = Math.floor(seconds / 60);
   const durationSeconds = game.phase === "POKER_BETTING"
     ? game.config.betTimeSeconds
-    : game.config.draftTimeSeconds;
+    : game.phase === "HAND_COMPLETE" ? 5 : game.config.draftTimeSeconds;
   const turnProgress = Math.max(0, Math.min(1, remainingMs / (durationSeconds * 1000)));
   const danger = seconds > 0 && seconds <= 3;
   const warning = !danger && turnProgress <= 0.5;
@@ -402,6 +539,7 @@ function updateTurnTimer() {
     activeSeat.classList.toggle("turn-danger", danger);
   }
   timer.querySelector("strong").textContent = `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  timer.querySelector("span").textContent = game.phase === "HAND_COMPLETE" ? "NEXT HAND" : "TIME";
   timer.classList.toggle("warning", warning);
   timer.classList.toggle("danger", danger);
   timer.setAttribute("aria-live", danger ? "assertive" : "off");
@@ -417,12 +555,20 @@ function renderActionDock(state) {
   const me = game.players.find((player) => player.id === state.viewerId);
   const dock = $("#action-dock");
 
-  if (!me.inHand) {
-    dock.innerHTML = waitingHtml("You are watching this hand");
+  if (game.players.some((player) => player.handChipDelta === undefined || player.sittingOut === undefined || player.refillCount === undefined)) {
+    dock.innerHTML = `<div class="version-warning"><b>HOST UPDATE REQUIRED</b><span>Restart start-game.bat, refresh this page, then create a new room.</span></div>`;
     return;
   }
   if (game.phase === "DRAFT_BIDDING" && game.draftBidStage === undefined) {
     dock.innerHTML = `<div class="version-warning"><b>HOST UPDATE REQUIRED</b><span>Restart start-game.bat, refresh this page, then create a new room.</span></div>`;
+    return;
+  }
+  if (game.phase === "HAND_COMPLETE") {
+    renderResult(state, dock);
+    return;
+  }
+  if (!me.inHand) {
+    dock.innerHTML = waitingHtml(me.sittingOut ? "You are sitting out · use Sit in next hand when ready" : "You are watching this hand");
     return;
   }
   if (game.phase === "DRAFT_BIDDING") {
@@ -448,7 +594,11 @@ function renderActionDock(state) {
       const number = $("#bid-number");
       range.addEventListener("input", () => { number.value = range.value; });
       number.addEventListener("input", () => { range.value = Math.max(0, Math.min(me.draftTokens, Number(number.value) || 0)); });
-      $("#lock-bid-button").addEventListener("click", () => send("draft_bid", { bid: Number(number.value) }));
+      $("#lock-bid-button").addEventListener("click", () => {
+        const bid = Number(number.value);
+        if (Number.isInteger(bid) && bid > 0 && bid <= me.draftTokens) playSoundEffect("chips");
+        send("draft_bid", { bid });
+      });
     }
     return;
   }
@@ -465,10 +615,6 @@ function renderActionDock(state) {
       return;
     }
     renderBettingControls(game, dock);
-    return;
-  }
-  if (game.phase === "HAND_COMPLETE") {
-    renderResult(state, dock);
     return;
   }
   dock.innerHTML = waitingHtml("Evaluating hands…");
@@ -517,6 +663,7 @@ function renderBettingControls(game, dock) {
   dock.querySelectorAll("[data-poker-action]").forEach((button) => button.addEventListener("click", () => {
     const action = button.dataset.pokerAction;
     const to = ["BET", "RAISE"].includes(action) ? Number($("#wager-number")?.value) : undefined;
+    if (["CALL", "BET", "RAISE", "ALL_IN"].includes(action)) playSoundEffect(action === "ALL_IN" ? "allIn" : "chips");
     send("poker_action", { action, to });
   }));
 }
@@ -527,15 +674,24 @@ function renderResult(state, dock) {
   const firstHand = game.result.winningHands?.[0];
   const cards = firstHand?.bestFive?.map((card) => cardHtml(card, { small: true })).join("") ?? "";
   const category = firstHand ? handNames[firstHand.category] : "All opponents folded";
-  const canContinue = game.players.filter((player) => player.chips > 0).length >= 2;
-  const hostButton = state.viewerId === state.hostId && canContinue
-    ? '<button class="primary-button next-hand-button" id="next-hand-button" type="button">Next hand →</button>'
+  const me = game.players.find((player) => player.id === state.viewerId);
+  const eligibleCount = game.players.filter((player) => player.chips > 0 && !player.sittingOut).length;
+  const canContinue = eligibleCount >= 2;
+  const nextHandMessage = canContinue
+    ? "Next hand starts automatically in 5 seconds"
+    : `Next hand paused · 2 seated players with chips are required (${eligibleCount}/2 ready)`;
+  const hostButton = state.viewerId === state.hostId
+    ? `<button class="primary-button next-hand-button" id="next-hand-button" type="button"${canContinue ? "" : " disabled"}>${canContinue ? "Next hand now →" : "Next hand unavailable"}</button>`
+    : "";
+  const refillButton = me.chips < game.config.startingStack
+    ? `<button class="refill-button" id="refill-chips-button" type="button">Refill to ${game.config.startingStack}<small>${me.refillCount} refill${me.refillCount === 1 ? "" : "s"} so far</small></button>`
     : "";
   dock.innerHTML = `<div class="result-panel">
-    <div class="winner-info"><p class="overline">${canContinue ? "HAND RESULT" : "MATCH WINNER"}</p><h3>${escapeHtml(winnerNames)} wins ${game.result.amount} chips</h3><p>${escapeHtml(category)}</p></div>
-    <div class="winning-cards">${cards}</div>${hostButton}
+    <div class="winner-info"><p class="overline">${canContinue ? "HAND RESULT" : "TABLE PAUSED"}</p><h3>${escapeHtml(winnerNames)} wins ${game.result.amount} chips</h3><p>${escapeHtml(category)} · ${escapeHtml(nextHandMessage)}</p></div>
+    <div class="winning-cards">${cards}</div><div class="result-actions">${refillButton}${hostButton}</div>
   </div>`;
   $("#next-hand-button")?.addEventListener("click", () => send("next_hand"));
+  $("#refill-chips-button")?.addEventListener("click", () => send("refill_chips"));
 }
 
 function renderSidebar(game) {
@@ -562,6 +718,10 @@ $("#lobby-seats").addEventListener("click", (event) => {
   }
 });
 $("#start-button").addEventListener("click", () => send("start_game"));
+$("#seat-toggle-button").addEventListener("click", () => {
+  const me = currentState?.game?.players.find((player) => player.id === currentState.viewerId);
+  if (me) send("set_sitting_out", { sittingOut: !me.sittingOut });
+});
 
 const settingSelectors = ["#setting-stack", "#setting-tokens", "#setting-small-blind", "#setting-big-blind", "#setting-draft-time", "#setting-bet-time"];
 settingSelectors.forEach((selector) => $(selector).addEventListener("change", () => send("update_config", {
@@ -587,7 +747,10 @@ $("#copy-link-button").addEventListener("click", async () => {
 
 $("#market-cards").addEventListener("click", (event) => {
   const card = event.target.closest("[data-card-id]");
-  if (card) send("draft_pick", { cardId: card.dataset.cardId });
+  if (card) {
+    playSoundEffect("cards");
+    send("draft_pick", { cardId: card.dataset.cardId });
+  }
 });
 
 $("#brand-button").addEventListener("click", () => {
@@ -615,6 +778,8 @@ function showGuideSlide(index) {
 }
 
 async function openRules() {
+  $("#sound-settings-popover").classList.add("hidden");
+  $("#sound-settings-button").setAttribute("aria-expanded", "false");
   const dialog = $("#rules-dialog");
   dialog.showModal();
   if (rulesLoaded) {
@@ -662,6 +827,29 @@ $("#log-toggle-button").addEventListener("click", () => {
   applyLogVisibility();
 });
 
+$("#sound-settings-button").addEventListener("click", () => {
+  const popover = $("#sound-settings-popover");
+  const opening = popover.classList.contains("hidden");
+  popover.classList.toggle("hidden", !opening);
+  $("#sound-settings-button").setAttribute("aria-expanded", String(opening));
+});
+$("#music-volume").addEventListener("input", (event) => updateSoundSetting("music", Number(event.target.value)));
+$("#effects-volume").addEventListener("input", (event) => updateSoundSetting("effects", Number(event.target.value)));
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".sound-settings-wrap")) return;
+  $("#sound-settings-popover").classList.add("hidden");
+  $("#sound-settings-button").setAttribute("aria-expanded", "false");
+});
+document.addEventListener("keydown", (event) => {
+  unlockAudio();
+  if (event.key === "Escape") {
+    $("#sound-settings-popover").classList.add("hidden");
+    $("#sound-settings-button").setAttribute("aria-expanded", "false");
+  }
+});
+document.addEventListener("pointerdown", unlockAudio, { capture: true });
+
+updateSoundSettingsUi();
 loadNetworkAddresses();
 connect();
 setInterval(updateTurnTimer, 100);

@@ -10,8 +10,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   betTimeSeconds: 30,
 });
 
+export const NEXT_HAND_DELAY_SECONDS = 5;
+
 export function marketLayout(playerCount, round) {
-  if (![2, 3, 4].includes(playerCount) || ![1, 2, 3, 4].includes(round)) {
+  if (![2, 3, 4, 5, 6].includes(playerCount) || ![1, 2, 3, 4].includes(round)) {
     throw new Error("Invalid market layout input");
   }
   if (round <= 2) return { faceUp: playerCount, faceDown: 2, total: playerCount + 2 };
@@ -74,13 +76,17 @@ function clampInteger(value, minimum, maximum) {
 
 export class DraftHoldemGame {
   constructor(roomPlayers, config = {}) {
-    if (roomPlayers.length < 2 || roomPlayers.length > 4) throw new Error("A game requires 2–4 players");
+    if (roomPlayers.length < 2 || roomPlayers.length > 6) throw new Error("A game requires 2–6 players");
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.players = roomPlayers.map((player, seatIndex) => ({
       id: player.id,
       name: player.name,
       seatIndex,
       chips: this.config.startingStack,
+      chipsAtHandStart: this.config.startingStack,
+      handChipDelta: 0,
+      sittingOut: false,
+      refillCount: 0,
       draftTokens: 0,
       cards: [],
       folded: false,
@@ -105,6 +111,10 @@ export class DraftHoldemGame {
     return this.players.filter((player) => player.inHand && !player.folded);
   }
 
+  eligiblePlayers() {
+    return this.players.filter((player) => player.chips > 0 && !player.sittingOut);
+  }
+
   player(playerId) {
     const player = this.players.find((candidate) => candidate.id === playerId);
     if (!player) throw new Error("Player not found");
@@ -126,10 +136,10 @@ export class DraftHoldemGame {
   }
 
   startHand(firstHand = false) {
-    const eligible = this.players.filter((player) => player.chips > 0);
+    const eligible = this.eligiblePlayers();
     if (eligible.length < 2) throw new Error("At least 2 players need chips to start a new hand");
     if (!firstHand) {
-      const nextDealer = this.nextSeat(this.dealerSeatIndex, (player) => player.chips > 0);
+      const nextDealer = this.nextSeat(this.dealerSeatIndex, (player) => player.chips > 0 && !player.sittingOut);
       this.dealerSeatIndex = nextDealer.seatIndex;
     }
 
@@ -146,7 +156,9 @@ export class DraftHoldemGame {
     this.logs = [];
 
     for (const player of this.players) {
-      player.inHand = player.chips > 0;
+      player.chipsAtHandStart = player.chips;
+      player.handChipDelta = 0;
+      player.inHand = player.chips > 0 && !player.sittingOut;
       player.cards = [];
       player.folded = false;
       player.allIn = false;
@@ -164,6 +176,25 @@ export class DraftHoldemGame {
     this.postBlinds();
     this.dealInitialCards();
     this.openMarket(1);
+  }
+
+  setSittingOut(playerId, sittingOut) {
+    const player = this.player(playerId);
+    player.sittingOut = Boolean(sittingOut);
+    this.addLog(`${player.name} will ${player.sittingOut ? "sit out" : "sit in"} next hand`, "muted");
+  }
+
+  refillChips(playerId) {
+    if (this.phase !== "HAND_COMPLETE") throw new Error("Chips can only be refilled between hands");
+    const player = this.player(playerId);
+    if (player.chips >= this.config.startingStack) throw new Error("Your stack is already full");
+    player.chips = this.config.startingStack;
+    player.refillCount += 1;
+    this.addLog(`${player.name} refills to ${this.config.startingStack} chips`, "green");
+  }
+
+  recordHandChipDeltas() {
+    for (const player of this.players) player.handChipDelta = player.chips - player.chipsAtHandStart;
   }
 
   commitChips(player, amount) {
@@ -539,10 +570,14 @@ export class DraftHoldemGame {
     if (this.phase === "POKER_BETTING" && this.betting?.actingPlayerId) {
       return `${this.handNumber}:${this.round}:bet:${this.betting.actingPlayerId}:${this.logs.length}`;
     }
+    if (this.phase === "HAND_COMPLETE" && this.eligiblePlayers().length >= 2) {
+      return `${this.handNumber}:complete`;
+    }
     return null;
   }
 
   timerDurationSeconds() {
+    if (this.phase === "HAND_COMPLETE") return NEXT_HAND_DELAY_SECONDS;
     return this.phase === "POKER_BETTING" ? this.config.betTimeSeconds : this.config.draftTimeSeconds;
   }
 
@@ -571,7 +606,9 @@ export class DraftHoldemGame {
       const action = legal?.actions.includes("CHECK") ? "CHECK" : "FOLD";
       this.addLog(`${this.player(playerId).name} timed out · ${action === "CHECK" ? "checked" : "folded"}`, "muted");
       this.pokerAction(playerId, action);
+      return;
     }
+    if (this.phase === "HAND_COMPLETE" && this.eligiblePlayers().length >= 2) this.startHand();
   }
 
   finishByFold(winner) {
@@ -586,6 +623,7 @@ export class DraftHoldemGame {
       pots: [{ amount, winnerIds: [winner.id] }],
       winningHands: [],
     };
+    this.recordHandChipDeltas();
     this.addLog(`${winner.name} wins ${amount} chips without showing`, "gold");
   }
 
@@ -633,6 +671,7 @@ export class DraftHoldemGame {
       pots: awardedPots,
       winningHands,
     };
+    this.recordHandChipDeltas();
     this.addLog(`${[...winnerIds].map((id) => this.player(id).name).join(" & ")} wins at showdown`, "gold");
   }
 
@@ -653,6 +692,9 @@ export class DraftHoldemGame {
         name: player.name,
         seatIndex: player.seatIndex,
         chips: player.chips,
+        handChipDelta: this.phase === "HAND_COMPLETE" ? player.handChipDelta : player.chips - player.chipsAtHandStart,
+        sittingOut: player.sittingOut,
+        refillCount: player.refillCount,
         draftTokens: player.draftTokens,
         folded: player.folded,
         allIn: player.allIn,

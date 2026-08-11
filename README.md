@@ -1,10 +1,14 @@
 # Draft Hold'em LAN
 
-Draft Hold'em for 2–4 players on the same Wi-Fi/LAN. The host owns the deck, secret bids and hidden cards; each browser receives only the information that player is allowed to see.
+Draft Hold'em for 2–6 players on the same Wi-Fi/LAN. The host owns the deck, secret bids and hidden cards; each browser receives only the information that player is allowed to see.
 
 Before starting, the host can set separate 10–120 second timers for Draft and Bet actions. Expired Draft actions bid 0 or auto-pick; expired Bet actions check when legal, otherwise fold.
 
 In the lobby, the host can kick guests. Disconnected lobby players have 10 seconds to reconnect before they are removed automatically; active-game seats are retained safely.
+
+Use the gear button in the top bar to set separate Music and Sound Effects volumes. Audio preferences are saved in each browser.
+
+During a game, use **Sit out next hand** to keep watching without being dealt in, then **Sit in next hand** to return. Between hands, a player below the configured starting stack can refill back to that amount; each player's refill count is shown at their seat. A new hand needs at least two seated players with chips, otherwise the result panel explains why the table is paused.
 
 ## Quick start on Windows
 
@@ -24,7 +28,7 @@ npm run test:ui
 npm start
 ```
 
-`npm run test:ui` uses Microsoft Edge or Google Chrome to run a two-player flow and save desktop/mobile screenshots in `artifacts/`.
+`npm run test:ui` uses Microsoft Edge or Google Chrome to verify two- and six-player flows, audio controls, and desktop/mobile layouts, then saves screenshots in `artifacts/`.
 
 To change the port in PowerShell:
 

@@ -23,6 +23,7 @@ const mimeTypes = {
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
+  ".mp3": "audio/mpeg",
 };
 
 function preferredNetworkAddress() {
@@ -294,7 +295,7 @@ function handleMessage(socket, payload) {
     const room = rooms.get(code);
     if (!room) throw new Error("Room not found");
     if (room.game) throw new Error("The game has started; only returning players can reconnect");
-    if (room.players.length >= 4) throw new Error("This room is full");
+    if (room.players.length >= 6) throw new Error("This room is full");
     const name = cleanName(payload.name);
     if (!name) throw new Error("Enter a player name");
     if (room.players.some((player) => player.name.toLocaleLowerCase("en") === name.toLocaleLowerCase("en"))) {
@@ -350,6 +351,12 @@ function handleMessage(socket, payload) {
     room.game?.draftCard(player.id, payload.cardId);
   } else if (payload.type === "poker_action") {
     room.game?.pokerAction(player.id, payload.action, payload.to);
+  } else if (payload.type === "set_sitting_out") {
+    if (!room.game) throw new Error("No game is running");
+    room.game.setSittingOut(player.id, payload.sittingOut);
+  } else if (payload.type === "refill_chips") {
+    if (!room.game) throw new Error("No game is running");
+    room.game.refillChips(player.id);
   } else if (payload.type === "next_hand") {
     if (!room.game) throw new Error("No game is running");
     if (room.hostId !== player.id) throw new Error("Only the host can start the next hand");

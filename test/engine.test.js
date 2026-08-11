@@ -1,12 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck, evaluateBest, evaluateFive, compareEvaluated } from "../src/cards.js";
-import { buildPots, DraftHoldemGame, marketLayout, resolveReverseBlindOrder } from "../src/engine.js";
+import {
+  buildPots,
+  DraftHoldemGame,
+  marketLayout,
+  NEXT_HAND_DELAY_SECONDS,
+  resolveReverseBlindOrder,
+} from "../src/engine.js";
 
 const card = (rank, suit = "SPADES") => ({ id: `${rank}-${suit}`, rank, suit });
 
 test("market layout follows X + 2 for all rounds and player counts", () => {
-  for (const playerCount of [2, 3, 4]) {
+  for (const playerCount of [2, 3, 4, 5, 6]) {
     assert.deepEqual(marketLayout(playerCount, 1), { faceUp: playerCount, faceDown: 2, total: playerCount + 2 });
     assert.deepEqual(marketLayout(playerCount, 2), { faceUp: playerCount, faceDown: 2, total: playerCount + 2 });
     assert.deepEqual(marketLayout(playerCount, 3), { faceUp: playerCount + 1, faceDown: 1, total: playerCount + 2 });
@@ -80,6 +86,8 @@ test("viewer state never leaks other hidden cards, market cards, or bids", () =>
   const stateA = game.stateFor("a");
   const playerA = stateA.players.find(({ id }) => id === "a");
   const playerB = stateA.players.find(({ id }) => id === "b");
+  assert.equal(playerA.handChipDelta, -5);
+  assert.equal(playerB.handChipDelta, -10);
   assert.ok(playerA.cards.find(({ visibility }) => visibility === "OWNER_ONLY").card);
   assert.equal(playerB.cards.find(({ visibility }) => visibility === "OWNER_ONLY").card, null);
   assert.ok(stateA.market.filter(({ visibility }) => visibility === "FACE_DOWN").every(({ card: hidden }) => hidden === null));
@@ -187,6 +195,21 @@ test("three- and four-player betting starts under the gun after the big blind", 
   assert.equal(fourPlayerGame.betting.actingPlayerId, "utg");
 });
 
+test("six-player games deal an eight-card market and act after the big blind", () => {
+  const game = new DraftHoldemGame([
+    { id: "dealer", name: "Dealer" },
+    { id: "sb", name: "SB" },
+    { id: "bb", name: "BB" },
+    { id: "utg", name: "UTG" },
+    { id: "middle", name: "Middle" },
+    { id: "cutoff", name: "Cutoff" },
+  ]);
+  assert.equal(game.market.length, 8);
+  assert.equal(game.market.filter(({ visibility }) => visibility === "FACE_UP").length, 6);
+  completeDraft(game);
+  assert.equal(game.betting.actingPlayerId, "utg");
+});
+
 test("three- and four-player blinds swap each round and zero bids start BB then SB", () => {
   const threePlayerGame = new DraftHoldemGame([
     { id: "utg", name: "UTG" },
@@ -275,6 +298,61 @@ test("bet timeout checks when legal and folds when facing a bet", () => {
   canCheck.handleTimeout();
   assert.equal(canCheck.phase, "DRAFT_BIDDING");
   assert.equal(canCheck.round, 2);
+});
+
+test("a completed hand automatically starts the next hand after five seconds", () => {
+  const game = new DraftHoldemGame([
+    { id: "a", name: "An" },
+    { id: "b", name: "Ben" },
+  ]);
+  completeDraft(game);
+  game.pokerAction("a", "FOLD");
+  assert.equal(game.phase, "HAND_COMPLETE");
+  assert.equal(game.stateFor("a").players.find(({ id }) => id === "a").handChipDelta, -5);
+  assert.equal(game.stateFor("b").players.find(({ id }) => id === "b").handChipDelta, 5);
+  assert.equal(game.timerKey(), "1:complete");
+  assert.equal(game.timerDurationSeconds(), NEXT_HAND_DELAY_SECONDS);
+  game.handleTimeout();
+  assert.equal(game.handNumber, 2);
+  assert.equal(game.phase, "DRAFT_BIDDING");
+});
+
+test("sitting out pauses the next hand until two funded players sit in", () => {
+  const game = new DraftHoldemGame([
+    { id: "a", name: "An" },
+    { id: "b", name: "Ben" },
+  ]);
+  game.setSittingOut("a", true);
+  completeDraft(game);
+  game.pokerAction("a", "FOLD");
+
+  assert.equal(game.phase, "HAND_COMPLETE");
+  assert.equal(game.timerKey(), null);
+  assert.equal(game.stateFor("a").players.find(({ id }) => id === "a").sittingOut, true);
+
+  game.setSittingOut("a", false);
+  assert.equal(game.timerKey(), "1:complete");
+  game.handleTimeout();
+  assert.equal(game.handNumber, 2);
+  assert.ok(game.players.every((player) => player.inHand));
+});
+
+test("refilling restores the starting stack and preserves the last hand result", () => {
+  const game = new DraftHoldemGame([
+    { id: "a", name: "An" },
+    { id: "b", name: "Ben" },
+  ]);
+  completeDraft(game);
+  game.pokerAction("a", "FOLD");
+  const handDelta = game.player("a").handChipDelta;
+
+  game.refillChips("a");
+
+  const player = game.stateFor("a").players.find(({ id }) => id === "a");
+  assert.equal(player.chips, game.config.startingStack);
+  assert.equal(player.refillCount, 1);
+  assert.equal(player.handChipDelta, handDelta);
+  assert.throws(() => game.refillChips("a"), /already full/);
 });
 
 test("a complete four-round hand gives each contender six cards and settles chips", () => {

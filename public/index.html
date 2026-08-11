@@ -26,6 +26,22 @@
       </div>
       <div class="topbar-actions">
         <span class="room-pill hidden" id="room-pill">ROOM <b>—</b></span>
+        <div class="sound-settings-wrap">
+          <button class="icon-button" id="sound-settings-button" type="button" aria-label="Open sound settings" aria-expanded="false" title="Sound settings">⚙</button>
+          <section class="sound-settings-popover panel hidden" id="sound-settings-popover" role="dialog" aria-label="Sound settings">
+            <header><div><span>SOUND SETTINGS</span><b>Table audio</b></div><small>Saved on this device</small></header>
+            <label class="sound-control" for="music-volume">
+              <span><i aria-hidden="true">♫</i><b>Music</b><small>Background soundtrack</small></span>
+              <output id="music-volume-output" for="music-volume">25%</output>
+              <input id="music-volume" type="range" min="0" max="100" step="1" value="25">
+            </label>
+            <label class="sound-control" for="effects-volume">
+              <span><i aria-hidden="true">♪</i><b>Sound effects</b><small>Cards, chips and all-in</small></span>
+              <output id="effects-volume-output" for="effects-volume">75%</output>
+              <input id="effects-volume" type="range" min="0" max="100" step="1" value="75">
+            </label>
+          </section>
+        </div>
         <button class="icon-button" id="rules-button" type="button" aria-label="Open game guide" title="How to play">?</button>
       </div>
     </header>
@@ -37,7 +53,7 @@
           <h1>Build the hand.<br><em>Sell the story.</em></h1>
           <p>Shape your hand through four secret drafts. Manage two resources, read the table, and make your story believable.</p>
           <div class="feature-row" aria-label="Features">
-            <span><b>2–4</b> players</span>
+            <span><b>2–6</b> players</span>
             <span><b>4</b> rounds</span>
             <span><b>LAN</b> private</span>
           </div>
@@ -125,6 +141,7 @@
             <div><span id="round-label">ROUND 1 / 4</span><strong id="phase-label">DRAFT PHASE</strong></div>
             <div class="phase-progress" id="phase-progress" aria-label="Hand progress"></div>
             <div class="round-tools">
+              <button class="table-seat-button" id="seat-toggle-button" type="button">Sit out next hand</button>
               <button class="log-toggle-button" id="log-toggle-button" type="button" aria-pressed="false"><span>Hide log</span></button>
               <div class="turn-timer hidden" id="turn-timer" role="timer" aria-live="off"><span>TIME</span><strong>00:30</strong></div>
               <div class="pot-compact"><span>POT</span><strong id="pot-label">0</strong><i class="chip-icon gold-chip"></i></div>

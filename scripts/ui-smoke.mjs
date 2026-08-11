@@ -33,6 +33,12 @@ try {
   await waitForServer();
   const appResponse = await fetch(`${baseUrl}/app.js`);
   if (appResponse.headers.get("cache-control") !== "no-store") throw new Error("Frontend assets must not be cached during local updates");
+  for (const audioFile of ["background.mp3", "placing-chip.mp3", "placing-card.mp3", "all-in.mp3"]) {
+    const response = await fetch(`${baseUrl}/audio/${audioFile}`);
+    if (!response.ok || response.headers.get("content-type") !== "audio/mpeg" || Number(response.headers.get("content-length")) < 1000) {
+      throw new Error(`Audio asset is not served correctly: ${audioFile}`);
+    }
+  }
   const networkAddresses = (await (await fetch(`${baseUrl}/network`)).json()).addresses ?? [];
   const lanOrigin = networkAddresses.find((address) => !address.includes("localhost")) ?? baseUrl;
   await mkdir("artifacts", { recursive: true });
@@ -40,6 +46,13 @@ try {
   const desktop = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1 });
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
   const extraPlayer = await browser.newContext({ viewport: { width: 900, height: 700 }, deviceScaleFactor: 1 });
+  await desktop.addInitScript(() => {
+    window.__playedAudio = [];
+    HTMLMediaElement.prototype.play = function play() {
+      window.__playedAudio.push(this.currentSrc || this.src);
+      return Promise.resolve();
+    };
+  });
   const host = await desktop.newPage();
   const guest = await mobile.newPage();
   const removable = await extraPlayer.newPage();
@@ -87,8 +100,8 @@ try {
   await host.screenshot({ path: "artifacts/rules-draft-tiebreak-desktop.png" });
   await host.click("#guide-next-button");
   await host.waitForFunction(() => document.querySelector("#guide-slide-title")?.textContent === "Poker betting");
-  if (!(await host.locator("#rules-content").innerText()).includes("3–4 PLAYERS · FIRST ACTION")) {
-    throw new Error("Poker guide does not show UTG as the first 3–4 player actor");
+  if (!(await host.locator("#rules-content").innerText()).includes("3–6 PLAYERS · FIRST ACTION")) {
+    throw new Error("Poker guide does not show the first 3–6 player actor after the big blind");
   }
   await host.waitForTimeout(300);
   await host.screenshot({ path: "artifacts/rules-betting-order-desktop.png" });
@@ -109,12 +122,41 @@ try {
     flowCopySize: parseFloat(getComputedStyle(document.querySelector(".guide-flow p")).fontSize),
     cardWidth: document.querySelector(".example-poker-card").getBoundingClientRect().width,
   }));
-  if (guideExample.cards !== 6 || guideExample.winningCards !== 5 || guideExample.sectionCopySize < 15 || guideExample.flowCopySize < 13 || guideExample.cardWidth < 55) {
+  if (guideExample.cards !== 6 || guideExample.winningCards !== 5 || guideExample.sectionCopySize < 17 || guideExample.flowCopySize < 15 || guideExample.cardWidth < 55) {
     throw new Error(`Help example is not visual or readable enough: ${JSON.stringify(guideExample)}`);
   }
   await host.waitForTimeout(300);
   await host.screenshot({ path: "artifacts/rules-example-hand-desktop.png" });
   await host.click("#close-rules-button");
+  await host.click("#sound-settings-button");
+  await host.waitForSelector("#sound-settings-popover:not(.hidden)");
+  const initialSoundSettings = await host.evaluate(() => ({
+    music: document.querySelector("#music-volume").value,
+    effects: document.querySelector("#effects-volume").value,
+    backgroundStarted: window.__playedAudio.some((source) => source.endsWith("/audio/background.mp3")),
+  }));
+  if (initialSoundSettings.music !== "25" || initialSoundSettings.effects !== "75" || !initialSoundSettings.backgroundStarted) {
+    throw new Error(`Default sound settings or music unlock failed: ${JSON.stringify(initialSoundSettings)}`);
+  }
+  await host.locator("#music-volume").evaluate((element) => {
+    element.value = "40";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await host.locator("#effects-volume").evaluate((element) => {
+    element.value = "60";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const savedSoundSettings = await host.evaluate(() => ({
+    musicOutput: document.querySelector("#music-volume-output").textContent,
+    effectsOutput: document.querySelector("#effects-volume-output").textContent,
+    saved: JSON.parse(localStorage.getItem("draft-holdem-sound-settings")),
+  }));
+  if (savedSoundSettings.musicOutput !== "40%" || savedSoundSettings.effectsOutput !== "60%"
+    || savedSoundSettings.saved.music !== 0.4 || savedSoundSettings.saved.effects !== 0.6) {
+    throw new Error(`Sound settings were not persisted: ${JSON.stringify(savedSoundSettings)}`);
+  }
+  await host.screenshot({ path: "artifacts/sound-settings-desktop.png" });
+  await host.click("#sound-settings-button");
 
   await guest.goto(baseUrl, { waitUntil: "networkidle" });
   await guest.click("#rules-button");
@@ -124,6 +166,17 @@ try {
   await guest.click("#guide-next-button");
   await guest.click("#guide-next-button");
   await guest.waitForFunction(() => document.querySelector("#guide-slide-title")?.textContent === "Secret draft");
+  const mobileHelpLayout = await guest.evaluate(() => {
+    const strip = document.querySelector(".guide-slide.active .guide-hand-strip").getBoundingClientRect();
+    const nextBlock = document.querySelector(".guide-slide.active .tie-break-example").getBoundingClientRect();
+    return {
+      blocksOverlap: strip.bottom > nextBlock.top,
+      draftRuleColumns: getComputedStyle(document.querySelector(".guide-slide.active .draft-rule-row")).gridTemplateColumns.split(" ").length,
+    };
+  });
+  if (mobileHelpLayout.blocksOverlap || mobileHelpLayout.draftRuleColumns !== 1) {
+    throw new Error(`Larger mobile help text is not laid out cleanly: ${JSON.stringify(mobileHelpLayout)}`);
+  }
   await guest.waitForTimeout(300);
   await guest.screenshot({ path: "artifacts/rules-mobile.png" });
   await guest.click("#guide-prev-button");
@@ -137,6 +190,96 @@ try {
   await guest.waitForTimeout(300);
   await guest.screenshot({ path: "artifacts/rules-example-hand-mobile.png" });
   await guest.click("#close-rules-button");
+  await guest.click("#sound-settings-button");
+  const mobileSoundPanel = await guest.locator("#sound-settings-popover").evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { left: box.left, right: box.right, top: box.top, viewportWidth: innerWidth };
+  });
+  if (mobileSoundPanel.left < 0 || mobileSoundPanel.right > mobileSoundPanel.viewportWidth || mobileSoundPanel.top < 0) {
+    throw new Error(`Mobile sound settings are clipped: ${JSON.stringify(mobileSoundPanel)}`);
+  }
+  await guest.screenshot({ path: "artifacts/sound-settings-mobile.png" });
+  await guest.click("#sound-settings-button");
+
+  const sixPlayerContexts = await Promise.all(Array.from({ length: 6 }, () => browser.newContext({
+    viewport: { width: 1366, height: 768 },
+    deviceScaleFactor: 1,
+  })));
+  await Promise.all(sixPlayerContexts.map((context) => context.addInitScript(() => {
+    localStorage.setItem("draft-holdem-sound-settings", JSON.stringify({ music: 0, effects: 0 }));
+  })));
+  const sixPlayers = await Promise.all(sixPlayerContexts.map((context) => context.newPage()));
+  await Promise.all(sixPlayers.map((page) => page.goto(baseUrl, { waitUntil: "networkidle" })));
+  await sixPlayers[0].fill("#player-name", "Seat 1");
+  await sixPlayers[0].click("#create-room-button");
+  await sixPlayers[0].waitForSelector("#lobby-view:not(.hidden)");
+  const sixPlayerCode = (await sixPlayers[0].textContent("#lobby-code")).trim();
+  for (let index = 1; index < sixPlayers.length; index += 1) {
+    await sixPlayers[index].goto(`${baseUrl}/?room=${sixPlayerCode}`, { waitUntil: "networkidle" });
+    await sixPlayers[index].fill("#player-name", `Seat ${index + 1}`);
+    await sixPlayers[index].click("#join-room-button");
+    await sixPlayers[index].waitForSelector("#lobby-view:not(.hidden)");
+  }
+  await sixPlayers[0].waitForFunction(() => document.querySelectorAll(".lobby-seat:not(.open)").length === 6);
+  await Promise.all(sixPlayers.map((page) => page.click("#ready-button")));
+  await sixPlayers[0].waitForFunction(() => !document.querySelector("#start-button").disabled);
+  await sixPlayers[0].click("#start-button");
+  await Promise.all(sixPlayers.map((page) => page.waitForSelector("#game-view:not(.hidden)")));
+  const sixPlayerLayout = await sixPlayers[0].evaluate(() => {
+    const seats = [...document.querySelectorAll(".player-seat")];
+    const rects = seats.map((seat) => {
+      const box = seat.getBoundingClientRect();
+      return { position: seat.dataset.position, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+    });
+    const overlaps = [];
+    for (let left = 0; left < rects.length; left += 1) {
+      for (let right = left + 1; right < rects.length; right += 1) {
+        const a = rects[left];
+        const b = rects[right];
+        if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
+          overlaps.push(`${a.position}/${b.position}`);
+        }
+      }
+    }
+    const cardRows = [...document.querySelectorAll(".seat-cards")].map((row) => row.getBoundingClientRect());
+    return {
+      count: seats.length,
+      positions: rects.map(({ position }) => position),
+      overlaps,
+      clippedCardRows: cardRows.filter((box) => box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight).length,
+      marketCards: document.querySelectorAll("#market-cards .playing-card").length,
+      horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  const expectedSixPositions = ["bottom", "lower-left", "upper-left", "top", "upper-right", "lower-right"];
+  if (sixPlayerLayout.count !== 6
+    || sixPlayerLayout.positions.join(",") !== expectedSixPositions.join(",")
+    || sixPlayerLayout.overlaps.length
+    || sixPlayerLayout.clippedCardRows
+    || sixPlayerLayout.marketCards !== 8
+    || sixPlayerLayout.horizontalOverflow > 1) {
+    throw new Error(`Six-player table is not fully visible: ${JSON.stringify(sixPlayerLayout)}`);
+  }
+  await sixPlayers[0].screenshot({ path: "artifacts/game-six-player-desktop.png", fullPage: true });
+  await sixPlayers[1].setViewportSize({ width: 390, height: 844 });
+  await sixPlayers[1].evaluate(() => window.scrollTo(0, 0));
+  await sixPlayers[1].waitForTimeout(200);
+  const sixPlayerMobileLayout = await sixPlayers[1].evaluate(() => ({
+    clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
+      const box = row.getBoundingClientRect();
+      return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
+    }).length,
+    clippedSeatShells: [...document.querySelectorAll(".seat-shell")].filter((shell) => {
+      const box = shell.getBoundingClientRect();
+      return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
+    }).length,
+    horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+  }));
+  if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells || sixPlayerMobileLayout.horizontalOverflow > 1) {
+    throw new Error(`Six-player mobile table is clipped: ${JSON.stringify(sixPlayerMobileLayout)}`);
+  }
+  await sixPlayers[1].screenshot({ path: "artifacts/game-six-player-mobile.png", fullPage: true });
+  await Promise.all(sixPlayerContexts.map((context) => context.close()));
 
   await host.fill("#player-name", "An");
   await host.click("#create-room-button");
@@ -176,12 +319,24 @@ try {
   await host.waitForFunction(() => document.querySelectorAll(".lobby-seat:not(.open)").length === 2, null, { timeout: 15_000 });
 
   await host.fill("#setting-draft-time", "10");
+  await host.locator("#setting-draft-time").press("Tab");
+  await guest.waitForFunction(() => document.querySelector("#setting-draft-time")?.value === "10");
   await host.fill("#setting-bet-time", "20");
-  await host.locator("#setting-bet-time").dispatchEvent("change");
-  await guest.waitForFunction(() => (
-    document.querySelector("#setting-draft-time")?.value === "10"
-    && document.querySelector("#setting-bet-time")?.value === "20"
-  ));
+  await host.locator("#setting-bet-time").press("Tab");
+  try {
+    await guest.waitForFunction(() => (
+      document.querySelector("#setting-draft-time")?.value === "10"
+      && document.querySelector("#setting-bet-time")?.value === "20"
+    ), null, { timeout: 5_000 });
+  } catch {
+    const timerSync = await Promise.all([host, guest].map((page) => page.evaluate(() => ({
+      draft: document.querySelector("#setting-draft-time")?.value,
+      bet: document.querySelector("#setting-bet-time")?.value,
+      connection: document.querySelector("#connection-label")?.textContent.replace(/\s+/g, " ").trim(),
+      toast: document.querySelector("#toast")?.textContent,
+    }))));
+    throw new Error(`Lobby timer settings did not synchronize: ${JSON.stringify(timerSync)}`);
+  }
   await host.click("#ready-button");
   await guest.click("#ready-button");
   await host.waitForFunction(() => !document.querySelector("#start-button").disabled);
@@ -224,6 +379,39 @@ try {
   if (opponentHiddenIndicator.width < 33 || !opponentHiddenIndicator.label.includes("HIDDEN")) {
     throw new Error(`Opponent hidden-card indicator is unclear: ${JSON.stringify(opponentHiddenIndicator)}`);
   }
+  const blindChipPiles = await host.evaluate(() => {
+    const count = (position) => document.querySelector(`.table-contribution[data-position="${position}"] .poker-chip-pile`)?.querySelectorAll(".poker-chip-stack i").length ?? 0;
+    return {
+      smallBlindChips: count("bottom"),
+      bigBlindChips: count("top"),
+      denominations: new Set([...document.querySelectorAll(".poker-chip-stack")].map((stack) => stack.className)).size,
+      legacyChipFrames: document.querySelectorAll(".contribution-stack.chips").length,
+    };
+  });
+  if (blindChipPiles.smallBlindChips < 1
+    || blindChipPiles.bigBlindChips <= blindChipPiles.smallBlindChips
+    || blindChipPiles.denominations < 2
+    || blindChipPiles.legacyChipFrames) {
+    throw new Error(`Chip piles do not scale or change denomination color: ${JSON.stringify(blindChipPiles)}`);
+  }
+  const ownBankrollLayout = await host.evaluate(() => {
+    const stack = document.querySelector('.player-seat[data-position="bottom"] .seat-chip-stack').getBoundingClientRect();
+    const avatar = document.querySelector('.player-seat[data-position="bottom"] .avatar').getBoundingClientRect();
+    const badges = document.querySelector('.player-seat[data-position="bottom"] .seat-badges').getBoundingClientRect();
+    const shell = document.querySelector('.player-seat[data-position="bottom"] .seat-shell').getBoundingClientRect();
+    const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+    return {
+      insideSeat: stack.left >= shell.left && stack.right <= shell.right && stack.top >= shell.top && stack.bottom <= shell.bottom,
+      besideAvatar: stack.left >= avatar.right - 1,
+      overlapsAvatar: overlaps(stack, avatar),
+      overlapsBadges: overlaps(stack, badges),
+      amount: document.querySelector('.player-seat[data-position="bottom"] .bankroll-pile .chip-pile-caption b').textContent.trim(),
+      legacyMoneyIcon: document.querySelector('.player-seat[data-position="bottom"] .resource-line').textContent.includes("◉"),
+    };
+  });
+  if (!ownBankrollLayout.insideSeat || !ownBankrollLayout.besideAvatar || ownBankrollLayout.overlapsAvatar || ownBankrollLayout.overlapsBadges || ownBankrollLayout.amount !== "495" || ownBankrollLayout.legacyMoneyIcon) {
+    throw new Error(`Player bankroll pile is not contained beside the avatar: ${JSON.stringify(ownBankrollLayout)}`);
+  }
   if (await host.locator(".game-sidebar").evaluate((element) => getComputedStyle(element).display !== "none")) throw new Error("Action log is not hidden by default");
   await host.click("#log-toggle-button");
   if (await host.locator(".game-sidebar").evaluate((element) => getComputedStyle(element).display === "none")) throw new Error("Action log did not open");
@@ -242,9 +430,13 @@ try {
     throw new Error(`Final countdown did not stay red in the top timer: ${JSON.stringify(dangerTimer)}`);
   }
   await host.screenshot({ path: "artifacts/game-urgent-timer-desktop.png" });
+  await host.evaluate(() => { window.__playedAudio = []; });
   await host.fill("#bid-number", "2");
   await host.click("#lock-bid-button");
   await host.waitForSelector('.table-contribution[data-position="bottom"] .tokens.secret');
+  if (!(await host.evaluate(() => window.__playedAudio.some((source) => source.endsWith("/audio/placing-chip.mp3"))))) {
+    throw new Error("Locking a positive Draft Token bid did not play the token placement sound");
+  }
   if ((await host.locator('.table-contribution[data-position="bottom"] .tokens.secret b').innerText()).trim() !== "2") {
     throw new Error("The viewer's locked Draft Token pile does not show its amount");
   }
@@ -311,7 +503,11 @@ try {
     throw new Error(`Player cards overlap the action dock: ${JSON.stringify(tableClearance)}`);
   }
   await host.screenshot({ path: "artifacts/game-draft-desktop.png" });
+  await host.evaluate(() => { window.__playedAudio = []; });
   await host.locator("#market-cards [data-card-id]").first().click();
+  if (!(await host.evaluate(() => window.__playedAudio.some((source) => source.endsWith("/audio/placing-card.mp3"))))) {
+    throw new Error("Drafting a card did not play the supplied card sound");
+  }
   await guest.waitForSelector("#market-cards [data-card-id]");
   await guest.locator("#market-cards [data-card-id]").first().click();
   await host.waitForSelector('[data-poker-action="CALL"]');
@@ -329,7 +525,23 @@ try {
   }
   const hostBlind = (await host.locator('.player-seat[data-position="bottom"] .seat-badge.blind').innerText()).trim();
   if (hostBlind !== "SB") throw new Error(`Round 1 host must be SB, got ${hostBlind}`);
+  await host.evaluate(() => {
+    window.__playedAudio = [];
+    window.__originalWebSocketSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = () => {};
+  });
+  await host.click('[data-poker-action="ALL_IN"]');
+  if (!(await host.evaluate(() => window.__playedAudio.some((source) => source.endsWith("/audio/all-in.mp3"))))) {
+    throw new Error("All-in did not play the supplied all-in sound");
+  }
+  await host.evaluate(() => {
+    WebSocket.prototype.send = window.__originalWebSocketSend;
+    window.__playedAudio = [];
+  });
   await host.click('[data-poker-action="CALL"]');
+  if (!(await host.evaluate(() => window.__playedAudio.some((source) => source.endsWith("/audio/placing-chip.mp3"))))) {
+    throw new Error("Committing poker chips did not play the chip placement sound");
+  }
   await guest.waitForSelector('.table-contribution[data-position="top"] .chips.animate-in');
   if ((await guest.locator('.table-contribution[data-position="top"] .chips b').innerText()).trim() !== "10") {
     throw new Error("The called chip pile does not show the player's full street contribution");
@@ -377,6 +589,59 @@ try {
   if (guestBlind !== "SB") throw new Error(`Round 2 guest must be SB, got ${guestBlind}`);
   await guest.evaluate(() => window.scrollTo(0, 0));
   await guest.screenshot({ path: "artifacts/game-round2-action-mobile.png", fullPage: true });
+  await host.evaluate(() => { window.__playedAudio = []; });
+  await guest.click('[data-poker-action="FOLD"]');
+  await host.waitForSelector(".result-panel");
+  const payoutFeedback = await host.evaluate(() => ({
+    animation: getComputedStyle(document.querySelector(".winner-chip-flight")).animationName,
+    deltas: [...document.querySelectorAll(".seat-badge.chip-delta")].map((badge) => badge.textContent.trim()).sort(),
+  }));
+  if (payoutFeedback.animation !== "pot-to-winner" || payoutFeedback.deltas.join(",") !== "HAND +10,HAND -10") {
+    throw new Error(`Winner payout feedback is incomplete: ${JSON.stringify(payoutFeedback)}`);
+  }
+  if (!(await host.evaluate(() => window.__playedAudio.some((source) => source.endsWith("/audio/placing-chip.mp3"))))) {
+    throw new Error("Awarding the pot did not play the supplied chip sound");
+  }
+  await host.waitForTimeout(350);
+  await host.screenshot({ path: "artifacts/game-result-chip-payout.png" });
+  const nextHandTimer = await host.locator("#turn-timer").evaluate((element) => ({
+    label: element.querySelector("span").textContent,
+    seconds: Number(element.querySelector("strong").textContent.split(":")[1]),
+  }));
+  if (nextHandTimer.label !== "NEXT HAND" || nextHandTimer.seconds < 1 || nextHandTimer.seconds > 5) {
+    throw new Error(`Completed-hand countdown is not five seconds: ${JSON.stringify(nextHandTimer)}`);
+  }
+  await host.click("#seat-toggle-button");
+  await host.waitForFunction(() => document.querySelector("#seat-toggle-button")?.textContent === "Sit in next hand");
+  await host.waitForFunction(() => document.querySelector("#turn-timer")?.classList.contains("hidden"));
+  const pausedResult = await host.evaluate(() => ({
+    nextDisabled: document.querySelector("#next-hand-button")?.disabled,
+    resultText: document.querySelector(".winner-info")?.textContent.replace(/\s+/g, " ").trim(),
+    sitOutBadge: document.querySelector('.player-seat[data-position="bottom"] .seat-badge.sitout')?.textContent.trim(),
+    potOverlapsBankroll: (() => {
+      const pot = document.querySelector("#pot-stack").getBoundingClientRect();
+      const bankroll = document.querySelector('.player-seat[data-position="bottom"] .seat-chip-stack').getBoundingClientRect();
+      return pot.left < bankroll.right && pot.right > bankroll.left && pot.top < bankroll.bottom && pot.bottom > bankroll.top;
+    })(),
+  }));
+  if (!pausedResult.nextDisabled || !pausedResult.resultText.includes("2 seated players with chips are required") || pausedResult.sitOutBadge !== "SITTING OUT" || pausedResult.potOverlapsBankroll) {
+    throw new Error(`Paused next-hand state is unclear: ${JSON.stringify(pausedResult)}`);
+  }
+  await guest.click("#refill-chips-button");
+  await host.waitForFunction(() => document.querySelector('.player-seat[data-position="top"] .seat-badge.refill')?.textContent.includes("×1"));
+  const refilledGuest = await host.evaluate(() => ({
+    chips: document.querySelector('.player-seat[data-position="top"] .bankroll-pile .chip-pile-caption b')?.textContent.trim(),
+    delta: document.querySelector('.player-seat[data-position="top"] .seat-badge.chip-delta')?.textContent.trim(),
+    refill: document.querySelector('.player-seat[data-position="top"] .seat-badge.refill')?.textContent.trim(),
+  }));
+  if (refilledGuest.chips !== "500" || refilledGuest.delta !== "HAND -10" || refilledGuest.refill !== "REFILL ×1") {
+    throw new Error(`Refill stack or counter is incorrect: ${JSON.stringify(refilledGuest)}`);
+  }
+  await host.screenshot({ path: "artifacts/game-result-sit-out-refill.png" });
+  await host.click("#seat-toggle-button");
+  await host.waitForSelector("#turn-timer:not(.hidden)");
+  await host.waitForFunction(() => document.querySelector("#round-label")?.textContent.includes("HAND 2"), null, { timeout: 7_000 });
+  await host.waitForSelector("#lock-bid-button");
 
   if (pageErrors.length) throw new Error(pageErrors.join("\n"));
   console.log(`UI smoke passed for room ${code}; screenshots saved in artifacts/.`);
