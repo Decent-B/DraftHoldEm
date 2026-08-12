@@ -35,3 +35,7 @@ To change the port in PowerShell:
 ```powershell
 $env:PORT=8080; npm start
 ```
+
+## Public internet deployment
+
+Do not expose the Node port directly. Expose HTTPS on TCP 443 through a reverse proxy or managed load balancer, use TCP 80 only for an HTTP-to-HTTPS redirect, and keep the application listener private. See [DEPLOYMENT.md](DEPLOYMENT.md) for the required environment variables, firewall boundary, Nginx example, and operational limitations.

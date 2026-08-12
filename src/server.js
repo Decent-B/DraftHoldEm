@@ -2,18 +2,29 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import { createSocket } from "node:dgram";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { DEFAULT_CONFIG, DraftHoldemGame } from "./engine.js";
+import {
+  clientAddress,
+  consumeMessageAllowance,
+  isWebSocketOriginAllowed,
+  loadSecurityConfig,
+  securityHeaders,
+} from "./security.js";
 
 const rootDirectory = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const publicDirectory = join(rootDirectory, "public");
 const rulebookPath = join(publicDirectory, "rules-guide.html");
-const port = Number(process.env.PORT) || 4173;
+const port = Number(process.env.PORT ?? 4173);
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be an integer between 1 and 65535");
+const security = loadSecurityConfig();
 const lobbyDisconnectGraceMs = 10_000;
 const rooms = new Map();
+const connectionsByIp = new Map();
+const roomAttemptsByIp = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -53,36 +64,47 @@ function networkAddresses(preferredAddress = null) {
   return [...new Set([...ordered, `http://localhost:${port}`])];
 }
 
-function sendJson(response, statusCode, value) {
+function sendJson(request, response, statusCode, value) {
   const body = JSON.stringify(value);
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     "Cache-Control": "no-store",
   });
-  response.end(body);
+  response.end(request.method === "HEAD" ? undefined : body);
 }
 
 async function serveHttp(request, response) {
-  const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, { "Allow": "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" }).end("Method not allowed");
+    return;
+  }
+  const url = new URL(request.url, "http://localhost");
   if (url.pathname === "/health") {
-    sendJson(response, 200, { ok: true, rooms: rooms.size });
+    sendJson(request, response, 200, { ok: true });
     return;
   }
   if (url.pathname === "/network") {
-    sendJson(response, 200, { addresses: networkAddresses(await preferredNetworkAddress()) });
+    const addresses = security.lanDiscovery ? networkAddresses(await preferredNetworkAddress()) : [];
+    sendJson(request, response, 200, { addresses });
     return;
   }
   if (url.pathname === "/rules") {
     const html = await readFile(rulebookPath, "utf8");
-    sendJson(response, 200, { html });
+    sendJson(request, response, 200, { html });
     return;
   }
 
-  let requestedPath = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
+  let requestedPath;
+  try {
+    requestedPath = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
+  } catch {
+    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Bad request");
+    return;
+  }
   requestedPath = normalize(requestedPath).replace(/^(\.\.[/\\])+/, "");
   const filePath = resolve(publicDirectory, requestedPath);
-  if (!filePath.startsWith(publicDirectory)) {
+  if (filePath !== publicDirectory && !filePath.startsWith(`${publicDirectory}${sep}`)) {
     response.writeHead(403).end("Forbidden");
     return;
   }
@@ -95,7 +117,7 @@ async function serveHttp(request, response) {
       "Content-Length": body.length,
       "Cache-Control": "no-store",
     });
-    response.end(body);
+    response.end(request.method === "HEAD" ? undefined : body);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
   }
@@ -105,7 +127,7 @@ function roomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code;
   do {
-    code = Array.from(randomBytes(5), (byte) => alphabet[byte % alphabet.length]).join("");
+    code = Array.from(randomBytes(8), (byte) => alphabet[byte % alphabet.length]).join("");
   } while (rooms.has(code));
   return code;
 }
@@ -115,7 +137,17 @@ function sessionToken() {
 }
 
 function cleanName(value) {
-  return String(value ?? "").trim().replace(/\s+/g, " ").slice(0, 20);
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 20);
+}
+
+function cleanRoomCode(value) {
+  const code = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return /^[A-HJ-NP-Z2-9]{8}$/.test(code) ? code : "";
 }
 
 function validateConfig(input, current = DEFAULT_CONFIG) {
@@ -142,6 +174,7 @@ function validateConfig(input, current = DEFAULT_CONFIG) {
 }
 
 function createRoom(name, requestedConfig) {
+  if (rooms.size >= security.maxRooms) throw new Error("The server has reached its room limit; try again later");
   const playerId = randomUUID();
   const code = roomCode();
   const room = {
@@ -152,10 +185,12 @@ function createRoom(name, requestedConfig) {
     game: null,
     timerHandle: null,
     timerKey: null,
+    cleanupTimer: null,
   };
   const player = {
     id: playerId,
     token: sessionToken(),
+    tokenExpiresAt: Date.now() + security.sessionTtlMs,
     name,
     ready: false,
     connected: true,
@@ -165,6 +200,24 @@ function createRoom(name, requestedConfig) {
   room.players.push(player);
   rooms.set(code, room);
   return { room, player };
+}
+
+function deleteRoom(room) {
+  if (room.timerHandle) clearTimeout(room.timerHandle);
+  if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
+  for (const player of room.players) {
+    if (player.disconnectTimer) clearTimeout(player.disconnectTimer);
+  }
+  rooms.delete(room.code);
+}
+
+function scheduleRoomCleanup(room) {
+  if (room.players.some((player) => player.connected) || room.cleanupTimer) return;
+  room.cleanupTimer = setTimeout(() => {
+    room.cleanupTimer = null;
+    if (!room.players.some((player) => player.connected)) deleteRoom(room);
+  }, security.roomIdleMs);
+  room.cleanupTimer.unref();
 }
 
 function lobbyState(room, viewerId) {
@@ -215,7 +268,7 @@ function removeLobbyPlayer(room, playerId, reason) {
     }
   }
   if (room.players.length === 0) {
-    rooms.delete(room.code);
+    deleteRoom(room);
     return true;
   }
   if (room.hostId === removedPlayer.id) room.hostId = room.players[0].id;
@@ -224,6 +277,13 @@ function removeLobbyPlayer(room, playerId, reason) {
 }
 
 function syncRoomTimer(room) {
+  if (!room.players.some((player) => player.connected)) {
+    if (room.timerHandle) clearTimeout(room.timerHandle);
+    room.timerHandle = null;
+    room.timerKey = null;
+    if (room.game) room.game.turnDeadline = null;
+    return;
+  }
   const key = room.game?.timerKey() ?? null;
   if (room.timerKey === key) return;
   if (room.timerHandle) clearTimeout(room.timerHandle);
@@ -265,6 +325,8 @@ function attach(socket, room, player) {
   player.disconnectTimer = null;
   player.socket = socket;
   player.connected = true;
+  if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
+  room.cleanupTimer = null;
   safeSend(socket, { type: "session", roomCode: room.code, playerId: player.id, token: player.token });
   broadcast(room);
 }
@@ -280,6 +342,17 @@ function requireContext(socket) {
 function handleMessage(socket, payload) {
   if (!payload || typeof payload.type !== "string") throw new Error("Invalid message");
 
+  if (!socket.context && ["create_room", "join_room", "resume"].includes(payload.type)) {
+    const attemptState = roomAttemptsByIp.get(socket.clientAddress) ?? { startedAt: Date.now(), count: 0 };
+    roomAttemptsByIp.set(socket.clientAddress, attemptState);
+    if (!consumeMessageAllowance(
+      attemptState,
+      Date.now(),
+      security.maxRoomAttemptsPerWindow,
+      security.roomAttemptWindowMs,
+    )) throw new Error("Too many room attempts; wait a minute and try again");
+  }
+
   if (payload.type === "create_room") {
     if (socket.context) throw new Error("You are already in a room");
     const name = cleanName(payload.name);
@@ -291,7 +364,7 @@ function handleMessage(socket, payload) {
 
   if (payload.type === "join_room") {
     if (socket.context) throw new Error("You are already in a room");
-    const code = String(payload.roomCode ?? "").trim().toUpperCase();
+    const code = cleanRoomCode(payload.roomCode);
     const room = rooms.get(code);
     if (!room) throw new Error("Room not found");
     if (room.game) throw new Error("The game has started; only returning players can reconnect");
@@ -302,7 +375,14 @@ function handleMessage(socket, payload) {
       throw new Error("That name is already in this room");
     }
     const player = {
-      id: randomUUID(), token: sessionToken(), name, ready: false, connected: true, socket: null, disconnectTimer: null,
+      id: randomUUID(),
+      token: sessionToken(),
+      tokenExpiresAt: Date.now() + security.sessionTtlMs,
+      name,
+      ready: false,
+      connected: true,
+      socket: null,
+      disconnectTimer: null,
     };
     room.players.push(player);
     attach(socket, room, player);
@@ -311,10 +391,14 @@ function handleMessage(socket, payload) {
 
   if (payload.type === "resume") {
     if (socket.context) return;
-    const code = String(payload.roomCode ?? "").trim().toUpperCase();
+    const code = cleanRoomCode(payload.roomCode);
     const room = rooms.get(code);
-    const player = room?.players.find((candidate) => candidate.token === payload.token);
+    const player = room?.players.find((candidate) => (
+      candidate.token === payload.token && candidate.tokenExpiresAt > Date.now()
+    ));
     if (!room || !player) throw new Error("Could not restore this session");
+    player.token = sessionToken();
+    player.tokenExpiresAt = Date.now() + security.sessionTtlMs;
     attach(socket, room, player);
     return;
   }
@@ -368,16 +452,61 @@ function handleMessage(socket, payload) {
   broadcast(room);
 }
 
-const server = createServer((request, response) => {
+const server = createServer({ maxHeaderSize: 16 * 1024 }, (request, response) => {
+  for (const [name, value] of Object.entries(securityHeaders(security.production))) response.setHeader(name, value);
   serveHttp(request, response).catch((error) => {
     console.error(error);
     response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" }).end("Server error");
   });
 });
+server.headersTimeout = 10_000;
+server.requestTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
 
-const webSocketServer = new WebSocketServer({ server });
-webSocketServer.on("connection", (socket) => {
-  socket.on("message", (rawMessage) => {
+const webSocketServer = new WebSocketServer({
+  server,
+  maxPayload: security.maxPayloadBytes,
+  perMessageDeflate: false,
+  verifyClient(info, done) {
+    let requestUrl;
+    try {
+      requestUrl = new URL(info.req.url, "http://localhost");
+    } catch {
+      return done(false, 400, "Bad request");
+    }
+    if (requestUrl.pathname !== "/") return done(false, 404, "Not found");
+    if (!isWebSocketOriginAllowed(info.req, security)) return done(false, 403, "Origin not allowed");
+    const address = clientAddress(info.req, security.trustProxy);
+    if (webSocketServer.clients.size >= security.maxConnections
+      || (connectionsByIp.get(address) ?? 0) >= security.maxConnectionsPerIp) {
+      return done(false, 429, "Too many connections");
+    }
+    info.req.clientAddress = address;
+    return done(true);
+  },
+});
+webSocketServer.on("connection", (socket, request) => {
+  const address = request.clientAddress ?? clientAddress(request, security.trustProxy);
+  connectionsByIp.set(address, (connectionsByIp.get(address) ?? 0) + 1);
+  socket.clientAddress = address;
+  socket.isAlive = true;
+  socket.rateLimit = { startedAt: Date.now(), count: 0 };
+  socket.on("pong", () => { socket.isAlive = true; });
+  socket.on("error", () => {});
+  socket.on("message", (rawMessage, isBinary) => {
+    if (isBinary) {
+      socket.close(1003, "Text messages only");
+      return;
+    }
+    if (!consumeMessageAllowance(
+      socket.rateLimit,
+      Date.now(),
+      security.maxMessagesPerWindow,
+      security.messageWindowMs,
+    )) {
+      socket.close(1008, "Message rate limit exceeded");
+      return;
+    }
     try {
       const payload = JSON.parse(rawMessage.toString());
       handleMessage(socket, payload);
@@ -386,6 +515,9 @@ webSocketServer.on("connection", (socket) => {
     }
   });
   socket.on("close", () => {
+    const remainingConnections = (connectionsByIp.get(address) ?? 1) - 1;
+    if (remainingConnections > 0) connectionsByIp.set(address, remainingConnections);
+    else connectionsByIp.delete(address);
     if (!socket.context) return;
     const room = rooms.get(socket.context.roomCode);
     const player = room?.players.find((candidate) => candidate.id === socket.context.playerId);
@@ -397,13 +529,39 @@ webSocketServer.on("connection", (socket) => {
         player.disconnectTimer = setTimeout(() => {
           if (!player.connected && !room.game) removeLobbyPlayer(room, player.id, "OFFLINE");
         }, lobbyDisconnectGraceMs);
+        player.disconnectTimer.unref();
       }
+      scheduleRoomCleanup(room);
     }
   });
 });
+webSocketServer.on("error", (error) => {
+  console.error("WebSocket server error:", error);
+});
 
-server.listen(port, "0.0.0.0", async () => {
+const heartbeat = setInterval(() => {
+  const now = Date.now();
+  for (const [address, state] of roomAttemptsByIp) {
+    if (now - state.startedAt >= security.roomAttemptWindowMs) roomAttemptsByIp.delete(address);
+  }
+  for (const socket of webSocketServer.clients) {
+    if (!socket.isAlive) {
+      socket.terminate();
+      continue;
+    }
+    socket.isAlive = false;
+    socket.ping();
+  }
+}, 30_000);
+heartbeat.unref();
+
+server.listen(port, security.host, async () => {
   console.log("\nDRAFT HOLD'EM is running:");
-  networkAddresses(await preferredNetworkAddress()).forEach((address) => console.log(`  ${address}`));
-  console.log("\nShare a LAN address with players on the same network. Press Ctrl+C to stop.\n");
+  if (security.lanDiscovery) {
+    networkAddresses(await preferredNetworkAddress()).forEach((address) => console.log(`  ${address}`));
+    console.log("\nShare a LAN address with players on the same network. Press Ctrl+C to stop.\n");
+  } else {
+    console.log(`  http://${security.host}:${port}`);
+    console.log("\nLAN discovery is disabled. Put this private listener behind an HTTPS reverse proxy.\n");
+  }
 });

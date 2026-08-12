@@ -703,7 +703,7 @@ function renderSidebar(game) {
 
 $("#create-room-button").addEventListener("click", () => send("create_room", { name: $("#player-name").value }));
 $("#join-room-button").addEventListener("click", () => send("join_room", { name: $("#player-name").value, roomCode: $("#room-code-input").value }));
-$("#room-code-input").addEventListener("input", (event) => { event.target.value = event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 5); });
+$("#room-code-input").addEventListener("input", (event) => { event.target.value = event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, "").slice(0, 8); });
 $("#room-code-input").addEventListener("keydown", (event) => { if (event.key === "Enter") $("#join-room-button").click(); });
 $("#player-name").addEventListener("keydown", (event) => { if (event.key === "Enter") $("#create-room-button").click(); });
 $("#ready-button").addEventListener("click", () => {

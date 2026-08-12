@@ -285,7 +285,7 @@ try {
   await host.click("#create-room-button");
   await host.waitForSelector("#lobby-view:not(.hidden)");
   const code = (await host.textContent("#lobby-code")).trim();
-  if (!/^[A-Z2-9]{5}$/.test(code)) throw new Error(`Unexpected room code: ${code}`);
+  if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) throw new Error(`Unexpected room code: ${code}`);
   const inviteUrl = (await host.textContent("#share-address")).trim();
   if (inviteUrl !== `${lanOrigin}/?room=${code}`) throw new Error(`Invite URL does not match the active LAN origin: ${inviteUrl}`);
 
