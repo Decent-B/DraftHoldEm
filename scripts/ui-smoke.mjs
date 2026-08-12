@@ -488,12 +488,18 @@ try {
     const progress = rect("#phase-progress");
     const topSeat = rect('.player-seat[data-position="top"] .seat-shell');
     const bottomCards = rect('.player-seat[data-position="bottom"] .seat-cards');
+    const bottomContribution = rect('.table-contribution[data-position="bottom"] .poker-chip-pile');
+    const bottomBadges = rect('.player-seat[data-position="bottom"] .seat-badges');
+    const potValue = rect("#pot-stack b");
     const actionDock = rect("#action-dock");
+    const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
     return {
       progressBottom: progress.bottom,
       topSeatTop: topSeat.top,
       bottomCardsBottom: bottomCards.bottom,
       actionDockTop: actionDock.top,
+      contributionOverlapsPotValue: overlaps(bottomContribution, potValue),
+      contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
     };
   });
   if (tableClearance.topSeatTop < tableClearance.progressBottom + 8) {
@@ -501,6 +507,9 @@ try {
   }
   if (tableClearance.bottomCardsBottom > tableClearance.actionDockTop - 8) {
     throw new Error(`Player cards overlap the action dock: ${JSON.stringify(tableClearance)}`);
+  }
+  if (tableClearance.contributionOverlapsPotValue || tableClearance.contributionOverlapsBadges) {
+    throw new Error(`Bottom contribution overlaps the pot value or seat badges: ${JSON.stringify(tableClearance)}`);
   }
   await host.screenshot({ path: "artifacts/game-draft-desktop.png" });
   await host.evaluate(() => { window.__playedAudio = []; });
@@ -551,19 +560,64 @@ try {
   await guest.waitForSelector('[data-poker-action="CHECK"]');
   const mobileLayout = await guest.evaluate(() => {
     const contribution = document.querySelector('.table-contribution[data-position="top"]').getBoundingClientRect();
+    const bottomContribution = document.querySelector('.table-contribution[data-position="bottom"] .poker-chip-pile').getBoundingClientRect();
+    const bottomBadges = document.querySelector('.player-seat[data-position="bottom"] .seat-badges').getBoundingClientRect();
     const marketTitle = document.querySelector(".market-title").getBoundingClientRect();
+    const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
     return {
       horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
       dockHeight: document.querySelector("#action-dock").getBoundingClientRect().height,
+      bettingIndicatorVisible: getComputedStyle(document.querySelector(".market-title")).display !== "none",
+      contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
       contributionOverlapsTitle: contribution.left < marketTitle.right
         && contribution.right > marketTitle.left
         && contribution.top < marketTitle.bottom
         && contribution.bottom > marketTitle.top,
     };
   });
-  if (mobileLayout.horizontalOverflow > 1 || mobileLayout.dockHeight > 150 || mobileLayout.contributionOverlapsTitle) {
+  if (mobileLayout.horizontalOverflow > 1 || mobileLayout.dockHeight > 150 || mobileLayout.bettingIndicatorVisible
+    || mobileLayout.contributionOverlapsBadges || mobileLayout.contributionOverlapsTitle) {
     throw new Error(`Mobile betting layout is not compact and clear: ${JSON.stringify(mobileLayout)}`);
   }
+  const responsiveViewports = [
+    { width: 320, height: 568, name: "small-phone" },
+    { width: 768, height: 600, name: "compact-tablet" },
+    { width: 1024, height: 600, name: "compact-laptop" },
+  ];
+  const responsiveLayouts = [];
+  for (const viewport of responsiveViewports) {
+    await guest.setViewportSize(viewport);
+    await guest.waitForTimeout(100);
+    responsiveLayouts.push(await guest.evaluate(({ name }) => {
+      const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const topbar = rect(".topbar");
+      const topSeat = rect('.player-seat[data-position="top"] .seat-shell');
+      const bottomCards = rect('.player-seat[data-position="bottom"] .seat-cards');
+      const bottomContribution = rect('.table-contribution[data-position="bottom"] .poker-chip-pile');
+      const bottomBadges = rect('.player-seat[data-position="bottom"] .seat-badges');
+      const dock = rect("#action-dock");
+      const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+      return {
+        name,
+        horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+        verticalOverflow: document.documentElement.scrollHeight - innerHeight,
+        topSeatClipped: topSeat.top < topbar.bottom - 1,
+        bottomCardsClipped: bottomCards.bottom > dock.top + 1,
+        contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
+        dockClipped: dock.bottom > innerHeight + 1,
+      };
+    }, viewport));
+    if (viewport.name !== "compact-tablet") {
+      await guest.screenshot({ path: `artifacts/game-betting-${viewport.name}.png` });
+    }
+  }
+  const responsiveFailure = responsiveLayouts.find((layout) => layout.horizontalOverflow > 1
+    || layout.verticalOverflow > 1 || layout.topSeatClipped || layout.bottomCardsClipped
+    || layout.contributionOverlapsBadges || layout.dockClipped);
+  if (responsiveFailure) {
+    throw new Error(`Game does not fit a supported viewport: ${JSON.stringify(responsiveLayouts)}`);
+  }
+  await guest.setViewportSize({ width: 390, height: 844 });
   await guest.evaluate(() => window.scrollTo(0, 0));
   await guest.screenshot({ path: "artifacts/game-betting-mobile.png", fullPage: true });
   await guest.click('[data-poker-action="CHECK"]');

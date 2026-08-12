@@ -199,6 +199,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Preserve the current game-table visual baseline: wide centered felt, compact seats, current card/market scale, bottom action dock, and optional hidden action log; do not rearrange or restyle it unless explicitly requested.
 - Never place timer text over the table; keep the top timer and active-avatar ring green above 50%, yellow at 50% remaining, and red for the final three seconds.
 - Keep guidance supporting copy at least 15px on desktop and section summaries at least 17px; compact game-table typography does not apply to the help panel.
+- Keep table contribution chip values clear of the total-pot readout and seat badges, and use the active-avatar ring instead of a center Poker turn indicator.
+- Keep the table, seats, cards, and action dock inside supported 320x568-and-larger viewports without requiring browser zoom or fullscreen.
 
 ---
 
