@@ -198,7 +198,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - When frontend state fields change, show an explicit outdated-host warning and serve local assets with no-store caching instead of leaving controls blank.
 - Label every card in the viewer's hand as PUBLIC or PRIVATE; never rely on card position alone to communicate what opponents can see.
 - Start 3–4 player Poker betting with the first eligible seat after the Big Blind (UTG); only heads-up betting starts with the Small Blind.
-- At every player count, advance both SB and BB one eligible seat every Draft round, recalculate UTG/Cutoff and first action from the current BB, and at 0 bids let the current BB pick before the current SB.
+- At every player count, rotate blinds so the current SB becomes the next Draft round's BB and the following eligible player becomes SB; recalculate UTG/Cutoff and first action from the current BB, and at 0 bids let the current BB pick before the current SB.
 - Preserve the current game-table visual baseline: wide centered felt, compact seats, current card/market scale, bottom action dock, and optional hidden action log; do not rearrange or restyle it unless explicitly requested.
 - Never place timer text over the table; keep the top timer and active-avatar ring green above 50%, yellow at 50% remaining, and red for the final three seconds.
 - Keep guidance supporting copy at least 15px on desktop and section summaries at least 17px; compact game-table typography does not apply to the help panel.

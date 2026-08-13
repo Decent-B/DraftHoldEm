@@ -210,23 +210,24 @@ test("six-player games deal an eight-card market and act after the big blind", (
   assert.equal(game.betting.actingPlayerId, "utg");
 });
 
-test("four-player blinds and first action advance one seat every Draft round", () => {
+test("four-player blind indicators follow A/B → B/C → C/D → D/A", () => {
   const game = new DraftHoldemGame([
-    { id: "dealer", name: "Dealer" },
-    { id: "sb", name: "SB" },
-    { id: "bb", name: "BB" },
-    { id: "utg", name: "UTG" },
+    { id: "c", name: "C" },
+    { id: "b", name: "B" },
+    { id: "a", name: "A" },
+    { id: "d", name: "D" },
   ]);
   const rounds = [
-    { smallBlind: "sb", bigBlind: "bb", firstActor: "utg", zeroBidOrder: ["bb", "sb", "dealer", "utg"] },
-    { smallBlind: "bb", bigBlind: "utg", firstActor: "dealer", zeroBidOrder: ["utg", "bb", "sb", "dealer"] },
-    { smallBlind: "utg", bigBlind: "dealer", firstActor: "sb", zeroBidOrder: ["dealer", "utg", "bb", "sb"] },
-    { smallBlind: "dealer", bigBlind: "sb", firstActor: "bb", zeroBidOrder: ["sb", "dealer", "utg", "bb"] },
+    { smallBlind: "b", bigBlind: "a", firstActor: "d", zeroBidOrder: ["a", "b", "c", "d"] },
+    { smallBlind: "c", bigBlind: "b", firstActor: "a", zeroBidOrder: ["b", "c", "d", "a"] },
+    { smallBlind: "d", bigBlind: "c", firstActor: "b", zeroBidOrder: ["c", "d", "a", "b"] },
+    { smallBlind: "a", bigBlind: "d", firstActor: "c", zeroBidOrder: ["d", "a", "b", "c"] },
   ];
 
   for (const [index, expected] of rounds.entries()) {
-    assert.equal(game.smallBlindSeatIndex, game.player(expected.smallBlind).seatIndex, `round ${index + 1} SB`);
-    assert.equal(game.bigBlindSeatIndex, game.player(expected.bigBlind).seatIndex, `round ${index + 1} BB`);
+    const publicState = game.stateFor("a");
+    assert.equal(publicState.players.find((player) => player.seatIndex === publicState.smallBlindSeatIndex).name, expected.smallBlind.toUpperCase(), `round ${index + 1} displayed SB`);
+    assert.equal(publicState.players.find((player) => player.seatIndex === publicState.bigBlindSeatIndex).name, expected.bigBlind.toUpperCase(), `round ${index + 1} displayed BB`);
     for (const player of game.activePlayers()) game.submitDraftBid(player.id, 0);
     assert.deepEqual(game.pickOrder, expected.zeroBidOrder, `round ${index + 1} zero-bid order`);
     pickAllMarketCards(game);

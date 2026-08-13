@@ -130,6 +130,15 @@ export class DraftHoldemGame {
     return null;
   }
 
+  previousSeat(fromSeat, predicate = () => true) {
+    for (let offset = 1; offset <= this.players.length; offset += 1) {
+      const seat = (fromSeat - offset + this.players.length) % this.players.length;
+      const player = this.players.find((candidate) => candidate.seatIndex === seat);
+      if (player && predicate(player)) return player;
+    }
+    return null;
+  }
+
   addLog(message, tone = "neutral") {
     this.logs.push({ id: randomUUID(), message, tone });
     if (this.logs.length > 80) this.logs.shift();
@@ -243,8 +252,8 @@ export class DraftHoldemGame {
     let smallBlindPlayer = this.players.find((player) => player.seatIndex === this.initialSmallBlindSeatIndex);
     let bigBlindPlayer = this.players.find((player) => player.seatIndex === this.initialBigBlindSeatIndex);
     for (let positionRound = 1; positionRound < round; positionRound += 1) {
-      smallBlindPlayer = this.nextSeat(smallBlindPlayer.seatIndex, inHand);
-      bigBlindPlayer = this.nextSeat(bigBlindPlayer.seatIndex, inHand);
+      smallBlindPlayer = this.previousSeat(smallBlindPlayer.seatIndex, inHand);
+      bigBlindPlayer = this.previousSeat(bigBlindPlayer.seatIndex, inHand);
     }
     this.smallBlindSeatIndex = smallBlindPlayer.seatIndex;
     this.bigBlindSeatIndex = bigBlindPlayer.seatIndex;

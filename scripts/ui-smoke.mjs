@@ -204,6 +204,63 @@ try {
   await guest.screenshot({ path: "artifacts/sound-settings-mobile.png" });
   await guest.click("#sound-settings-button");
 
+  const fourPlayerContexts = await Promise.all(Array.from({ length: 4 }, () => browser.newContext({
+    viewport: { width: 1366, height: 768 },
+    deviceScaleFactor: 1,
+  })));
+  await Promise.all(fourPlayerContexts.map((context) => context.addInitScript(() => {
+    localStorage.setItem("draft-holdem-sound-settings", JSON.stringify({ music: 0, effects: 0 }));
+  })));
+  const fourPlayers = await Promise.all(fourPlayerContexts.map((context) => context.newPage()));
+  const fourPlayerNames = ["C", "B", "A", "D"];
+  await Promise.all(fourPlayers.map((page) => page.goto(baseUrl, { waitUntil: "networkidle" })));
+  await fourPlayers[0].fill("#player-name", fourPlayerNames[0]);
+  await fourPlayers[0].click("#create-room-button");
+  await fourPlayers[0].waitForSelector("#lobby-view:not(.hidden)");
+  const fourPlayerCode = (await fourPlayers[0].textContent("#lobby-code")).trim();
+  for (let index = 1; index < fourPlayers.length; index += 1) {
+    await fourPlayers[index].goto(`${baseUrl}/?room=${fourPlayerCode}`, { waitUntil: "networkidle" });
+    await fourPlayers[index].fill("#player-name", fourPlayerNames[index]);
+    await fourPlayers[index].click("#join-room-button");
+    await fourPlayers[index].waitForSelector("#lobby-view:not(.hidden)");
+  }
+  await fourPlayers[0].waitForFunction(() => document.querySelectorAll(".lobby-seat:not(.open)").length === 4);
+  await Promise.all(fourPlayers.map((page) => page.click("#ready-button")));
+  await fourPlayers[0].waitForFunction(() => !document.querySelector("#start-button").disabled);
+  await fourPlayers[0].click("#start-button");
+  await Promise.all(fourPlayers.map((page) => page.waitForSelector("#lock-bid-button")));
+  const renderedBlinds = (page) => page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll(".player-seat")].map((seat) => [
+      seat.querySelector(".seat-name").textContent.replace(/\s*YOU\s*$/, "").trim(),
+      seat.querySelector(".seat-badge.blind")?.textContent.trim() ?? null,
+    ]),
+  ));
+  const roundOneBlinds = await renderedBlinds(fourPlayers[0]);
+  if (roundOneBlinds.A !== "BB" || roundOneBlinds.B !== "SB" || roundOneBlinds.C || roundOneBlinds.D) {
+    throw new Error(`Four-player Round 1 blind badges are wrong: ${JSON.stringify(roundOneBlinds)}`);
+  }
+  await Promise.all(fourPlayers.map((page) => page.click("#lock-bid-button")));
+  const fourPlayersByName = Object.fromEntries(fourPlayerNames.map((name, index) => [name, fourPlayers[index]]));
+  for (const name of ["A", "B", "C", "D"]) {
+    await fourPlayersByName[name].waitForSelector("#market-cards [data-card-id]");
+    await fourPlayersByName[name].locator("#market-cards [data-card-id]").first().click();
+  }
+  await fourPlayersByName.D.waitForSelector('[data-poker-action="CALL"]');
+  await fourPlayersByName.D.click('[data-poker-action="CALL"]');
+  await fourPlayersByName.C.waitForSelector('[data-poker-action="CALL"]');
+  await fourPlayersByName.C.click('[data-poker-action="CALL"]');
+  await fourPlayersByName.B.waitForSelector('[data-poker-action="CALL"]');
+  await fourPlayersByName.B.click('[data-poker-action="CALL"]');
+  await fourPlayersByName.A.waitForSelector('[data-poker-action="CHECK"]');
+  await fourPlayersByName.A.click('[data-poker-action="CHECK"]');
+  await fourPlayers[0].waitForFunction(() => document.querySelector("#round-label")?.textContent.startsWith("ROUND 2"));
+  const roundTwoBlinds = await renderedBlinds(fourPlayers[0]);
+  if (roundTwoBlinds.B !== "BB" || roundTwoBlinds.C !== "SB" || roundTwoBlinds.A || roundTwoBlinds.D) {
+    throw new Error(`Four-player Round 2 blind badges are wrong: ${JSON.stringify(roundTwoBlinds)}`);
+  }
+  await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-blinds.png", fullPage: true });
+  await Promise.all(fourPlayerContexts.map((context) => context.close()));
+
   const sixPlayerContexts = await Promise.all(Array.from({ length: 6 }, () => browser.newContext({
     viewport: { width: 1366, height: 768 },
     deviceScaleFactor: 1,
