@@ -46,6 +46,7 @@ let logHidden = localStorage.getItem("draft-holdem-hide-log") !== "false";
 let previousGameState = null;
 let guideSlides = [];
 let guideSlideIndex = 0;
+let pendingDraftBid = { key: null, value: 0 };
 const soundSettingsKey = "draft-holdem-sound-settings";
 const audioSources = {
   music: "/audio/background.mp3",
@@ -621,17 +622,25 @@ function renderActionDock(state) {
       const waiting = game.players.filter((player) => player.draftBidEligible && !player.draftBidLocked).length;
       dock.innerHTML = `<div class="locked-panel"><span>✓</span><div><b>${tieBreak ? "RE-BID" : "BID"} ${me.currentDraftBid} LOCKED</b><small>Waiting for ${waiting} player${waiting === 1 ? "" : "s"}…</small></div></div>`;
     } else {
+      const pendingBidKey = `${state.roomCode}:${state.viewerId}:${game.handNumber}:${game.round}:${game.draftBidStage}:${game.draftTieRound ?? 0}`;
+      if (pendingDraftBid.key !== pendingBidKey) pendingDraftBid = { key: pendingBidKey, value: 0 };
+      pendingDraftBid.value = Math.max(0, Math.min(me.draftTokens, pendingDraftBid.value));
       dock.innerHTML = `<div class="draft-controls">
         <div class="control-heading"><span>${tieBreak ? `TIE-BREAK ${game.draftTieRound}` : "DRAFT BID"} · SECRET</span><b>${tieBreak ? "Re-bid to break the tie" : "How many Draft Tokens do you want to bid?"}</b><small>0–${me.draftTokens} tokens · ${tieBreak ? "additional bids" : "every bid"} are spent</small></div>
-        <div class="bid-input-wrap"><input id="bid-range" type="range" min="0" max="${me.draftTokens}" value="0"><input class="number-box" id="bid-number" type="number" min="0" max="${me.draftTokens}" value="0" aria-label="Draft Token bid"></div>
+        <div class="bid-input-wrap"><input id="bid-range" type="range" min="0" max="${me.draftTokens}" value="${pendingDraftBid.value}"><input class="number-box" id="bid-number" type="number" min="0" max="${me.draftTokens}" value="${pendingDraftBid.value}" aria-label="Draft Token bid"></div>
         <button class="lock-bid-button" id="lock-bid-button" type="button">${tieBreak ? "LOCK RE-BID" : "LOCK BID"}</button>
       </div>`;
       const range = $("#bid-range");
       const number = $("#bid-number");
-      range.addEventListener("input", () => { number.value = range.value; });
-      number.addEventListener("input", () => { range.value = Math.max(0, Math.min(me.draftTokens, Number(number.value) || 0)); });
+      const rememberBid = (value) => {
+        pendingDraftBid.value = Math.max(0, Math.min(me.draftTokens, Number(value) || 0));
+        return pendingDraftBid.value;
+      };
+      range.addEventListener("input", () => { number.value = rememberBid(range.value); });
+      number.addEventListener("input", () => { range.value = rememberBid(number.value); });
       $("#lock-bid-button").addEventListener("click", () => {
         const bid = Number(number.value);
+        if (Number.isInteger(bid) && bid >= 0 && bid <= me.draftTokens) pendingDraftBid.value = bid;
         if (Number.isInteger(bid) && bid > 0 && bid <= me.draftTokens) playSoundEffect("chips");
         send("draft_bid", { bid });
       });

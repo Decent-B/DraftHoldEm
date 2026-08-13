@@ -206,6 +206,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Keep the table, seats, cards, and action dock inside supported 320x568-and-larger viewports without requiring browser zoom or fullscreen.
 - A socket belongs to one room: connect to `/room/new` to create or `/room/CODE` to join, and never auto-replay `create_room` or `join_room` on reconnect — only `resume`.
 - Pixel thresholds in `scripts/ui-smoke.mjs` shift with the browser's font metrics; confirm a layout failure against unmodified `main` in the same browser before treating it as a regression.
+- Preserve an unlocked Draft Token selection across synchronized state rerenders; another player's action must never reset it to zero.
 
 ---
 

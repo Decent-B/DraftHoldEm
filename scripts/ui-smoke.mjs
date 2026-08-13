@@ -239,8 +239,22 @@ try {
   if (roundOneBlinds.A !== "BB" || roundOneBlinds.B !== "SB" || roundOneBlinds.C || roundOneBlinds.D) {
     throw new Error(`Four-player Round 1 blind badges are wrong: ${JSON.stringify(roundOneBlinds)}`);
   }
-  await Promise.all(fourPlayers.map((page) => page.click("#lock-bid-button")));
   const fourPlayersByName = Object.fromEntries(fourPlayerNames.map((name, index) => [name, fourPlayers[index]]));
+  await fourPlayersByName.A.fill("#bid-number", "1");
+  await fourPlayersByName.B.click("#lock-bid-button");
+  await fourPlayersByName.A.waitForSelector(".contribution-stack.tokens.secret");
+  const preservedPendingBid = await fourPlayersByName.A.evaluate(() => ({
+    number: document.querySelector("#bid-number")?.value,
+    range: document.querySelector("#bid-range")?.value,
+  }));
+  if (preservedPendingBid.number !== "1" || preservedPendingBid.range !== "1") {
+    throw new Error(`Pending Draft Token bid reset after another player acted: ${JSON.stringify(preservedPendingBid)}`);
+  }
+  await fourPlayersByName.A.click("#lock-bid-button");
+  await fourPlayersByName.A.waitForFunction(() => document.querySelector(".locked-panel b")?.textContent === "BID 1 LOCKED");
+  await fourPlayersByName.C.click("#lock-bid-button");
+  await fourPlayersByName.D.click("#lock-bid-button");
+  await fourPlayersByName.A.waitForFunction(() => document.querySelector('.player-seat[data-position="bottom"] .token-value')?.textContent.includes("11"));
   for (const name of ["A", "B", "C", "D"]) {
     await fourPlayersByName[name].waitForSelector("#market-cards [data-card-id]");
     await fourPlayersByName[name].locator("#market-cards [data-card-id]").first().click();
@@ -259,6 +273,15 @@ try {
     throw new Error(`Four-player Round 2 blind badges are wrong: ${JSON.stringify(roundTwoBlinds)}`);
   }
   await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-blinds.png", fullPage: true });
+  await Promise.all(fourPlayers.map((page) => page.click("#lock-bid-button")));
+  for (const name of ["B", "C", "D", "A"]) {
+    await fourPlayersByName[name].waitForSelector("#market-cards [data-card-id]");
+    await fourPlayersByName[name].locator("#market-cards [data-card-id]").first().click();
+  }
+  await fourPlayers[0].waitForFunction(() => (
+    document.querySelector(".player-seat.is-turn .seat-name")?.textContent.replace(/\s*YOU\s*$/, "").trim() === "A"
+  ));
+  await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-utg.png", fullPage: true });
   await Promise.all(fourPlayerContexts.map((context) => context.close()));
 
   const sixPlayerContexts = await Promise.all(Array.from({ length: 6 }, () => browser.newContext({
