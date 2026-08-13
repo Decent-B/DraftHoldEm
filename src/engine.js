@@ -252,8 +252,8 @@ export class DraftHoldemGame {
     let smallBlindPlayer = this.players.find((player) => player.seatIndex === this.initialSmallBlindSeatIndex);
     let bigBlindPlayer = this.players.find((player) => player.seatIndex === this.initialBigBlindSeatIndex);
     for (let positionRound = 1; positionRound < round; positionRound += 1) {
-      smallBlindPlayer = this.previousSeat(smallBlindPlayer.seatIndex, inHand);
-      bigBlindPlayer = this.previousSeat(bigBlindPlayer.seatIndex, inHand);
+      smallBlindPlayer = this.nextSeat(smallBlindPlayer.seatIndex, inHand);
+      bigBlindPlayer = this.nextSeat(bigBlindPlayer.seatIndex, inHand);
     }
     this.smallBlindSeatIndex = smallBlindPlayer.seatIndex;
     this.bigBlindSeatIndex = bigBlindPlayer.seatIndex;

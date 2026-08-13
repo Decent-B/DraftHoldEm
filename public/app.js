@@ -525,7 +525,7 @@ function renderGame(state) {
   })).join("");
 
   const order = $("#draft-order");
-  if (game.pickOrder.length) {
+  if (game.pickOrder.length && game.phase !== "HAND_COMPLETE") {
     order.classList.remove("hidden");
     order.innerHTML = game.pickOrder.map((id, index) => {
       const player = game.players.find((candidate) => candidate.id === id);
@@ -625,6 +625,14 @@ function renderActionDock(state) {
       const pendingBidKey = `${state.roomCode}:${state.viewerId}:${game.handNumber}:${game.round}:${game.draftBidStage}:${game.draftTieRound ?? 0}`;
       if (pendingDraftBid.key !== pendingBidKey) pendingDraftBid = { key: pendingBidKey, value: 0 };
       pendingDraftBid.value = Math.max(0, Math.min(me.draftTokens, pendingDraftBid.value));
+      const existingRange = $("#bid-range");
+      const existingNumber = $("#bid-number");
+      if (dock.dataset.draftBidKey === pendingBidKey && existingRange && existingNumber && $("#lock-bid-button")) {
+        existingRange.max = me.draftTokens;
+        existingNumber.max = me.draftTokens;
+        return;
+      }
+      dock.dataset.draftBidKey = pendingBidKey;
       dock.innerHTML = `<div class="draft-controls">
         <div class="control-heading"><span>${tieBreak ? `TIE-BREAK ${game.draftTieRound}` : "DRAFT BID"} · SECRET</span><b>${tieBreak ? "Re-bid to break the tie" : "How many Draft Tokens do you want to bid?"}</b><small>0–${me.draftTokens} tokens · ${tieBreak ? "additional bids" : "every bid"} are spent</small></div>
         <div class="bid-input-wrap"><input id="bid-range" type="range" min="0" max="${me.draftTokens}" value="${pendingDraftBid.value}"><input class="number-box" id="bid-number" type="number" min="0" max="${me.draftTokens}" value="${pendingDraftBid.value}" aria-label="Draft Token bid"></div>

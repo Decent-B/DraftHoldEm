@@ -241,13 +241,23 @@ try {
   }
   const fourPlayersByName = Object.fromEntries(fourPlayerNames.map((name, index) => [name, fourPlayers[index]]));
   await fourPlayersByName.A.fill("#bid-number", "1");
+  await fourPlayersByName.A.evaluate(() => {
+    document.querySelector("#bid-number").dataset.syncIdentity = "preserved";
+  });
   await fourPlayersByName.B.click("#lock-bid-button");
   await fourPlayersByName.A.waitForSelector(".contribution-stack.tokens.secret");
   const preservedPendingBid = await fourPlayersByName.A.evaluate(() => ({
     number: document.querySelector("#bid-number")?.value,
     range: document.querySelector("#bid-range")?.value,
+    identity: document.querySelector("#bid-number")?.dataset.syncIdentity,
+    focused: document.activeElement?.id,
+    tokens: document.querySelector('.player-seat[data-position="bottom"] .token-value')?.textContent,
   }));
-  if (preservedPendingBid.number !== "1" || preservedPendingBid.range !== "1") {
+  if (preservedPendingBid.number !== "1"
+    || preservedPendingBid.range !== "1"
+    || preservedPendingBid.identity !== "preserved"
+    || preservedPendingBid.focused !== "bid-number"
+    || !preservedPendingBid.tokens?.includes("12")) {
     throw new Error(`Pending Draft Token bid reset after another player acted: ${JSON.stringify(preservedPendingBid)}`);
   }
   await fourPlayersByName.A.click("#lock-bid-button");
@@ -269,17 +279,18 @@ try {
   await fourPlayersByName.A.click('[data-poker-action="CHECK"]');
   await fourPlayers[0].waitForFunction(() => document.querySelector("#round-label")?.textContent.startsWith("ROUND 2"));
   const roundTwoBlinds = await renderedBlinds(fourPlayers[0]);
-  if (roundTwoBlinds.B !== "BB" || roundTwoBlinds.C !== "SB" || roundTwoBlinds.A || roundTwoBlinds.D) {
+  if (roundTwoBlinds.D !== "BB" || roundTwoBlinds.A !== "SB" || roundTwoBlinds.B || roundTwoBlinds.C) {
     throw new Error(`Four-player Round 2 blind badges are wrong: ${JSON.stringify(roundTwoBlinds)}`);
   }
   await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-blinds.png", fullPage: true });
   await Promise.all(fourPlayers.map((page) => page.click("#lock-bid-button")));
-  for (const name of ["B", "C", "D", "A"]) {
+  for (const name of ["D", "A", "B", "C"]) {
     await fourPlayersByName[name].waitForSelector("#market-cards [data-card-id]");
     await fourPlayersByName[name].locator("#market-cards [data-card-id]").first().click();
   }
   await fourPlayers[0].waitForFunction(() => (
-    document.querySelector(".player-seat.is-turn .seat-name")?.textContent.replace(/\s*YOU\s*$/, "").trim() === "A"
+    document.querySelector("#phase-label")?.textContent.trim() === "POKER BETTING"
+    && document.querySelector(".player-seat.is-turn .seat-name")?.textContent.replace(/\s*YOU\s*$/, "").trim() === "C"
   ));
   await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-utg.png", fullPage: true });
   await Promise.all(fourPlayerContexts.map((context) => context.close()));
@@ -746,6 +757,22 @@ try {
   await host.evaluate(() => { window.__playedAudio = []; });
   await guest.click('[data-poker-action="FOLD"]');
   await host.waitForSelector(".result-panel");
+  await guest.waitForSelector(".result-panel");
+  const resultLayouts = await Promise.all([host, guest].map((page) => page.evaluate(() => {
+    const draftOrder = document.querySelector("#draft-order");
+    const bottomCards = document.querySelector('.player-seat[data-position="bottom"] .seat-cards').getBoundingClientRect();
+    const resultPanel = document.querySelector("#action-dock").getBoundingClientRect();
+    return {
+      draftOrderVisible: getComputedStyle(draftOrder).display !== "none",
+      bottomCardsOverlapWinner: bottomCards.left < resultPanel.right
+        && bottomCards.right > resultPanel.left
+        && bottomCards.top < resultPanel.bottom
+        && bottomCards.bottom > resultPanel.top,
+    };
+  })));
+  if (resultLayouts.some(({ draftOrderVisible, bottomCardsOverlapWinner }) => draftOrderVisible || bottomCardsOverlapWinner)) {
+    throw new Error(`Winner banner overlaps the completed-hand table: ${JSON.stringify(resultLayouts)}`);
+  }
   const payoutFeedback = await host.evaluate(() => ({
     animation: getComputedStyle(document.querySelector(".winner-chip-flight")).animationName,
     deltas: [...document.querySelectorAll(".seat-badge.chip-delta")].map((badge) => badge.textContent.trim()).sort(),
@@ -758,6 +785,7 @@ try {
   }
   await host.waitForTimeout(350);
   await host.screenshot({ path: "artifacts/game-result-chip-payout.png" });
+  await guest.screenshot({ path: "artifacts/game-result-mobile.png" });
   const nextHandTimer = await host.locator("#turn-timer").evaluate((element) => ({
     label: element.querySelector("span").textContent,
     seconds: Number(element.querySelector("strong").textContent.split(":")[1]),

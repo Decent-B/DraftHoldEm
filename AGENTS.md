@@ -198,7 +198,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - When frontend state fields change, show an explicit outdated-host warning and serve local assets with no-store caching instead of leaving controls blank.
 - Label every card in the viewer's hand as PUBLIC or PRIVATE; never rely on card position alone to communicate what opponents can see.
 - Start 3–4 player Poker betting with the first eligible seat after the Big Blind (UTG); only heads-up betting starts with the Small Blind.
-- At every player count, rotate blinds so the current SB becomes the next Draft round's BB and the following eligible player becomes SB; recalculate UTG/Cutoff and first action from the current BB, and at 0 bids let the current BB pick before the current SB.
+- At every player count, rotate all positions clockwise each Draft round: the current BB becomes SB, the next clockwise eligible player becomes BB, and UTG/Cutoff and first action are recalculated from the new BB; at 0 bids let the current BB pick before the current SB.
 - Preserve the current game-table visual baseline: wide centered felt, compact seats, current card/market scale, bottom action dock, and optional hidden action log; do not rearrange or restyle it unless explicitly requested.
 - Never place timer text over the table; keep the top timer and active-avatar ring green above 50%, yellow at 50% remaining, and red for the final three seconds.
 - Keep guidance supporting copy at least 15px on desktop and section summaries at least 17px; compact game-table typography does not apply to the help panel.
@@ -206,7 +206,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Keep the table, seats, cards, and action dock inside supported 320x568-and-larger viewports without requiring browser zoom or fullscreen.
 - A socket belongs to one room: connect to `/room/new` to create or `/room/CODE` to join, and never auto-replay `create_room` or `join_room` on reconnect — only `resume`.
 - Pixel thresholds in `scripts/ui-smoke.mjs` shift with the browser's font metrics; confirm a layout failure against unmodified `main` in the same browser before treating it as a regression.
-- Preserve an unlocked Draft Token selection across synchronized state rerenders; another player's action must never reset it to zero.
+- Preserve the unlocked Draft Token input node, focus, selected value, and remaining-token display across synchronized state updates; another player's action must never reset or interrupt it.
+- Hide the completed Draft-order strip during `HAND RESULT` so it cannot collide with the winner panel; keep the bottom hand clear of that panel at desktop and mobile widths.
 
 ---
 
