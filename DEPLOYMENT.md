@@ -1,93 +1,90 @@
-# Internet deployment
+# Deployment
 
-This application is safe to treat as an ephemeral, private-room game, not as a real-money poker service or an identity system. Rooms and sessions live only in one Node process: a restart loses them, and multiple replicas do not share state.
+What an operator configures. For the deployed architecture and the reasoning behind it, see
+[docs/architecture.md](docs/architecture.md).
 
-## Network boundary
+| Part | Host | Deployed by |
+| --- | --- | --- |
+| Client (`public/`) | Vercel, production branch `main` | Pushing to `main` |
+| Game server (`src/`) | Cloudflare Workers + Durable Objects | `npm run deploy` |
 
-Expose only:
+## Game server
 
-- TCP 443 to the internet for HTTPS and secure WebSockets.
-- TCP 80 optionally, only to redirect to HTTPS.
+```bash
+npx wrangler login
+npm run deploy
+```
 
-Do not expose port 4173 publicly. On a VM, bind Node to `127.0.0.1:4173`, put Nginx/Caddy/a managed load balancer in front, and block 4173 in both the cloud firewall and host firewall. In containers, Node may need to bind `0.0.0.0` inside its private container network; publish only the reverse proxy's 80/443 ports.
+[wrangler.jsonc](wrangler.jsonc) holds the entire configuration: the `Room` Durable Object, the
+room-creation rate limit, `ALLOWED_ORIGINS`, and the `ws.draft-hold-em.binhnguyen.dev` custom
+domain.
 
-TLS must terminate at the reverse proxy or load balancer. Use an automatically renewed certificate and redirect all HTTP traffic to HTTPS.
+`ALLOWED_ORIGINS` is a comma-separated list of exact browser origins, with no path and no
+trailing slash. Sockets from any other origin are refused with 403. Vercel preview
+deployments have their own hostnames, so add them here if previews need to connect.
 
-## Required production settings
+The custom domain requires the `binhnguyen.dev` zone to be on Cloudflare DNS. Without it,
+remove the `routes` block and use the `workers.dev` URL that `wrangler deploy` prints, then
+update `GAME_SERVER_URL` and `connect-src` to match.
 
-Set these in the service manager or hosting platform, not in source control:
+`GET /health` returns `{"ok":true}`; every other path serves only WebSocket upgrades.
+
+## Client
+
+Import the repository on Vercel with `main` as the production branch and set one environment
+variable, for **Production and Preview** both:
 
 ```text
-NODE_ENV=production
-HOST=127.0.0.1
-PORT=4173
-ALLOWED_ORIGINS=https://game.example.com
-TRUST_PROXY=true
-ENABLE_LAN_DISCOVERY=false
+GAME_SERVER_URL=wss://ws.draft-hold-em.binhnguyen.dev
 ```
 
-`ALLOWED_ORIGINS` is a comma-separated list of exact origins, with no path or trailing slash. The server refuses to start in production without it. `TRUST_PROXY=true` trusts `X-Forwarded-For` for per-client limits, so enable it only when the application port is private and the trusted proxy overwrites that header.
+The build (`scripts/build-client-config.mjs`) writes `public/config.js` from it and fails when
+the variable is missing, when it is not `wss://` or `https://`, or when it does not match
+`connect-src` in [vercel.json](vercel.json). Leave the dashboard's build command and output
+directory empty so `vercel.json` applies.
 
-The defaults also enforce a 16 KiB WebSocket message limit, 40 messages per five seconds per connection, 30 room create/join/resume attempts per minute per client IP, 20 connections per client IP, 500 total connections, 500 rooms, a one-hour expiry for rooms with no connected players, and a 24-hour reconnect-session lifetime. Reconnect tokens rotate whenever they are used. The limits can be adjusted with:
+`vercel.json` also carries the browser security headers and cache policy: `no-store` on the app
+assets, long-lived immutable caching for `/audio/`.
+
+Moving the game server means changing `GAME_SERVER_URL` **and** `connect-src` together. The
+build check exists to catch forgetting the second.
+
+## Tunables
+
+Defaults, overridable as `vars` in `wrangler.jsonc`:
 
 ```text
-MAX_PAYLOAD_BYTES
-MAX_MESSAGES_PER_WINDOW
-MESSAGE_WINDOW_MS
-MAX_ROOM_ATTEMPTS_PER_WINDOW
-ROOM_ATTEMPT_WINDOW_MS
-MAX_CONNECTIONS_PER_IP
-MAX_CONNECTIONS
-MAX_ROOMS
-ROOM_IDLE_MS
-SESSION_TTL_MS
+MAX_PAYLOAD_BYTES         16384     per WebSocket message
+MAX_MESSAGES_PER_WINDOW   40        per socket
+MESSAGE_WINDOW_MS         5000
+MAX_CONNECTIONS_PER_ROOM  24        sockets addressed to one room
+ROOM_IDLE_MS              3600000   how long an emptied room waits for a player to return
+SESSION_TTL_MS            86400000  reconnect token lifetime
 ```
 
-Keep limits at the reverse proxy or hosting edge too. Application limits protect the Node process after a connection reaches it; they do not absorb volumetric denial-of-service traffic.
+Room creation is capped at 30 per minute per client IP by the `ROOM_LIMITER` binding.
 
-## Nginx example
+## Operating notes
 
-This is the relevant proxy shape; certificate paths and service management depend on the host:
+- **Deploy between game nights, not during one.** Redeploying the Worker ends in-flight rooms;
+  players get "Room not found" and start a new table.
+- Rooms are in-memory and ephemeral, and there are no accounts — anyone holding a room code can
+  join until the lobby is full or the game starts.
+- `npx wrangler tail` streams live server logs.
+- `npx wrangler rollback` restores a previous Worker version; Vercel promotes earlier client
+  deployments from its dashboard.
+- Free-plan headroom is 100,000 requests and 313,000 GB-s per day, which is far more than
+  playing with friends consumes.
 
-```nginx
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
+## Local development
 
-server {
-    listen 80;
-    server_name game.example.com;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name game.example.com;
-
-    ssl_certificate     /etc/letsencrypt/live/game.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/game.example.com/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:4173;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 75s;
-    }
-}
+```bash
+npm install
+npm run dev      # client on 4173, Worker and Durable Objects on 8787
+npm test         # engine, security, config generator, Worker integration
+npm run test:ui  # two- and six-player browser flows, screenshots in artifacts/
 ```
 
-The server sends browser security headers, accepts production WebSockets only from configured origins, disables private-address discovery in production, rejects non-GET HTTP methods and binary WebSocket messages, and removes fully disconnected rooms after the idle deadline.
-
-## Operational checklist
-
-- Run one Node instance under a non-administrator account and a restart supervisor such as systemd or the hosting platform's service manager.
-- Keep Node and locked dependencies patched; run `npm audit --omit=dev` during builds.
-- Restrict logs and platform access. There are no application secrets today, but deployment credentials and TLS private keys must never enter the repository.
-- Monitor process restarts, memory, connection counts, proxy 4xx/5xx rates, and certificate renewal.
-- Use `/health` only for liveness checks. It intentionally does not expose room counts.
-- If persistent games or horizontal scaling are required, move room/session state to a shared store and add coordinated pub/sub before adding replicas.
-- Anyone with a room invite can join the lobby until it is full or the game starts. Add account authentication or room passwords before using this for private events with stronger access-control requirements.
+`npm run dev` runs both halves as they are deployed. `public/config.js` is committed pointing at
+`ws://localhost:8787` and the Vercel build overwrites it, so nothing local needs editing. The
+Worker's `ALLOWED_ORIGINS` is overridden to the local client origin for development runs.

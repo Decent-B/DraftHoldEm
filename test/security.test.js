@@ -1,16 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  clientAddress,
   consumeMessageAllowance,
   isWebSocketOriginAllowed,
+  loadSecurityConfig,
   parseAllowedOrigins,
-  securityHeaders,
 } from "../src/security.js";
-
-function request(headers = {}, remoteAddress = "127.0.0.1") {
-  return { headers, socket: { remoteAddress } };
-}
 
 test("allowed origins must be exact HTTP(S) origins", () => {
   assert.deepEqual([...parseAllowedOrigins("https://game.example.com,http://localhost:4173")], [
@@ -21,27 +16,34 @@ test("allowed origins must be exact HTTP(S) origins", () => {
   assert.throws(() => parseAllowedOrigins("javascript:alert(1)"), /must be origins/);
 });
 
-test("production WebSockets require an allowlisted browser origin", () => {
-  const config = {
-    production: true,
-    allowedOrigins: new Set(["https://game.example.com"]),
-  };
-  assert.equal(isWebSocketOriginAllowed(request({ origin: "https://game.example.com" }), config), true);
-  assert.equal(isWebSocketOriginAllowed(request({ origin: "https://evil.example" }), config), false);
-  assert.equal(isWebSocketOriginAllowed(request(), config), false);
+test("a configured allowlist admits only its own origins", () => {
+  const allowed = new Set(["https://game.example.com"]);
+  assert.equal(isWebSocketOriginAllowed("https://game.example.com", allowed), true);
+  assert.equal(isWebSocketOriginAllowed("https://evil.example", allowed), false);
+  assert.equal(isWebSocketOriginAllowed("not a url", allowed), false);
+  // Browsers always send Origin, so a missing one is not a browser and is refused.
+  assert.equal(isWebSocketOriginAllowed(undefined, allowed), false);
 });
 
-test("development WebSockets default to the request host", () => {
-  const config = { production: false, allowedOrigins: new Set() };
-  assert.equal(isWebSocketOriginAllowed(request({ host: "localhost:4173", origin: "http://localhost:4173" }), config), true);
-  assert.equal(isWebSocketOriginAllowed(request({ host: "localhost:4173", origin: "http://evil.example" }), config), false);
-  assert.equal(isWebSocketOriginAllowed(request(), config), true);
+test("an unconfigured allowlist means local development and admits any origin", () => {
+  const unconfigured = new Set();
+  assert.equal(isWebSocketOriginAllowed("http://localhost:4173", unconfigured), true);
+  assert.equal(isWebSocketOriginAllowed(undefined, unconfigured), true);
 });
 
-test("forwarded client addresses are trusted only when configured", () => {
-  const incoming = request({ "x-forwarded-for": "203.0.113.10, 127.0.0.1" }, "127.0.0.1");
-  assert.equal(clientAddress(incoming, false), "127.0.0.1");
-  assert.equal(clientAddress(incoming, true), "203.0.113.10");
+test("limits come from Worker bindings and are range checked", () => {
+  const defaults = loadSecurityConfig({});
+  assert.equal(defaults.maxPayloadBytes, 16 * 1024);
+  assert.equal(defaults.maxMessagesPerWindow, 40);
+  assert.equal(defaults.sessionTtlMs, 24 * 60 * 60 * 1000);
+  assert.equal(defaults.allowedOrigins.size, 0);
+
+  const configured = loadSecurityConfig({ MAX_PAYLOAD_BYTES: "2048", ROOM_IDLE_MS: "60000" });
+  assert.equal(configured.maxPayloadBytes, 2048);
+  assert.equal(configured.roomIdleMs, 60_000);
+
+  assert.throws(() => loadSecurityConfig({ MAX_PAYLOAD_BYTES: "8" }), /between 1024 and/);
+  assert.throws(() => loadSecurityConfig({ MESSAGE_WINDOW_MS: "not a number" }), /must be an integer/);
 });
 
 test("message allowance resets after its fixed window", () => {
@@ -50,12 +52,4 @@ test("message allowance resets after its fixed window", () => {
   assert.equal(consumeMessageAllowance(state, 1_002, 2, 5_000), true);
   assert.equal(consumeMessageAllowance(state, 1_003, 2, 5_000), false);
   assert.equal(consumeMessageAllowance(state, 6_000, 2, 5_000), true);
-});
-
-test("browser security headers restrict executable content and framing", () => {
-  const headers = securityHeaders(true);
-  assert.match(headers["Content-Security-Policy"], /script-src 'self'/);
-  assert.match(headers["Content-Security-Policy"], /frame-ancestors 'none'/);
-  assert.equal(headers["X-Content-Type-Options"], "nosniff");
-  assert.equal(headers["Strict-Transport-Security"], "max-age=31536000; includeSubDomains");
 });

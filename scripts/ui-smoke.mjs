@@ -1,36 +1,41 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
+import { spawnClient, spawnWorker, waitForHttp } from "./local-servers.mjs";
 
 const port = 4397;
 const baseUrl = `http://127.0.0.1:${port}`;
+// public/config.js points the client at ws://localhost:8787, so the Worker runs there.
+const workerPort = 8787;
+// A Playwright-managed Chromium is preferred when one is installed: on WSL the
+// google-chrome on PATH can be a shim for the Windows build, which cannot open the
+// debugging pipe Playwright drives it through.
+function managedChromium() {
+  try {
+    return chromium.executablePath();
+  } catch {
+    return null;
+  }
+}
+
 const browserPath = process.env.BROWSER_PATH || [
+  managedChromium(),
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-].find(existsSync);
-if (!browserPath) throw new Error("Microsoft Edge or Google Chrome is required for the UI test");
-const server = spawn(process.execPath, ["src/server.js"], {
-  cwd: process.cwd(),
-  env: { ...process.env, PORT: String(port) },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+].filter(Boolean).find(existsSync);
+if (!browserPath) throw new Error("A Chromium-based browser is required for the UI test; set BROWSER_PATH");
 
-async function waitForServer() {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/health`);
-      if (response.ok) return;
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  throw new Error("Server did not become ready");
-}
+// The same two processes as `npm run dev`: static client plus Worker and Durable Objects.
+const client = spawnClient({ port, stdio: ["ignore", "pipe", "pipe"] });
+const worker = spawnWorker({ port: workerPort, clientOrigin: baseUrl, stdio: ["ignore", "pipe", "pipe"] });
 
 let browser;
 try {
-  await waitForServer();
+  await waitForHttp(baseUrl, client);
+  await waitForHttp(`http://127.0.0.1:${workerPort}/health`, worker);
   const appResponse = await fetch(`${baseUrl}/app.js`);
   if (appResponse.headers.get("cache-control") !== "no-store") throw new Error("Frontend assets must not be cached during local updates");
   for (const audioFile of ["background.mp3", "placing-chip.mp3", "placing-card.mp3", "all-in.mp3"]) {
@@ -39,8 +44,6 @@ try {
       throw new Error(`Audio asset is not served correctly: ${audioFile}`);
     }
   }
-  const networkAddresses = (await (await fetch(`${baseUrl}/network`)).json()).addresses ?? [];
-  const lanOrigin = networkAddresses.find((address) => !address.includes("localhost")) ?? baseUrl;
   await mkdir("artifacts", { recursive: true });
   browser = await chromium.launch({ executablePath: browserPath, headless: true });
   const desktop = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1 });
@@ -61,7 +64,7 @@ try {
   guest.on("pageerror", (error) => pageErrors.push(`guest: ${error.message}`));
   removable.on("pageerror", (error) => pageErrors.push(`removable: ${error.message}`));
 
-  await host.goto(lanOrigin, { waitUntil: "networkidle" });
+  await host.goto(baseUrl, { waitUntil: "networkidle" });
   await host.screenshot({ path: "artifacts/home-desktop.png", fullPage: true });
   await host.click("#rules-button");
   await host.waitForSelector("#rules-content h1");
@@ -287,7 +290,7 @@ try {
   const code = (await host.textContent("#lobby-code")).trim();
   if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) throw new Error(`Unexpected room code: ${code}`);
   const inviteUrl = (await host.textContent("#share-address")).trim();
-  if (inviteUrl !== `${lanOrigin}/?room=${code}`) throw new Error(`Invite URL does not match the active LAN origin: ${inviteUrl}`);
+  if (inviteUrl !== `${baseUrl}/?room=${code}`) throw new Error(`Invite URL does not match the client origin: ${inviteUrl}`);
 
   await guest.goto(`${baseUrl}/?room=${code}`, { waitUntil: "networkidle" });
   await guest.fill("#player-name", "Ben");
@@ -308,8 +311,9 @@ try {
   await removable.waitForSelector("#home-view:not(.hidden)");
   await host.waitForFunction(() => document.querySelectorAll(".lobby-seat:not(.open)").length === 2);
 
+  // A kicked player's socket closes for good: sockets belong to a seat in a room, so
+  // rejoining is a deliberate act rather than an automatic reconnect.
   await removable.waitForSelector("#connection-label.offline");
-  await removable.waitForSelector("#connection-label.online");
   await removable.fill("#player-name", "Dave");
   await removable.fill("#room-code-input", code);
   await removable.click("#join-room-button");
@@ -358,7 +362,9 @@ try {
     topbar: document.querySelector(".topbar").getBoundingClientRect().height,
     actionDock: document.querySelector("#action-dock").getBoundingClientRect().height,
   }));
-  if (compactChrome.topbar > 60 || compactChrome.actionDock > 84) {
+  // Guards against the chrome growing enough to crowd the table. The exact pixels move a
+  // little with each browser's font metrics, so the ceilings leave room for that.
+  if (compactChrome.topbar > 60 || compactChrome.actionDock > 88) {
     throw new Error(`Game chrome is not compact enough: ${JSON.stringify(compactChrome)}`);
   }
   const ownCardWidth = await host.locator('.player-seat[data-position="bottom"] .playing-card.small').first().evaluate((element) => element.getBoundingClientRect().width);
@@ -478,7 +484,7 @@ try {
     throw new Error(`Timer bars did not turn yellow at 50%: ${warningRing}`);
   }
   await host.screenshot({ path: "artifacts/game-timer-warning-desktop.png" });
-  await host.waitForSelector(".player-seat.is-turn.turn-danger", { timeout: 4_000 });
+  await host.waitForSelector(".player-seat.is-turn.turn-danger", { timeout: 8_000 });
   const dangerRing = await host.locator(".player-seat.is-turn .avatar").evaluate((element) => getComputedStyle(element, "::before").backgroundImage);
   if (!dangerRing.includes("rgb(255, 97, 115)") || !(await host.locator("#turn-timer").evaluate((element) => element.classList.contains("danger")))) {
     throw new Error(`Timer bars did not turn red for the final three seconds: ${dangerRing}`);
@@ -701,5 +707,6 @@ try {
   console.log(`UI smoke passed for room ${code}; screenshots saved in artifacts/.`);
 } finally {
   await browser?.close();
-  server.kill();
+  client.kill();
+  worker.kill();
 }

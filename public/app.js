@@ -29,10 +29,17 @@ const phaseNames = {
   HAND_COMPLETE: "HAND RESULT",
 };
 
+const ROOM_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{8}$/;
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 15_000;
+// Shown when a game state arrives without fields this client expects, which means the
+// deployed game server is older than this page.
+const OUTDATED_VERSION_WARNING = '<div class="version-warning"><b>UPDATE REQUIRED</b><span>Reload this page, then create a new room. If it happens again, the game server needs redeploying.</span></div>';
+
 let socket;
 let currentState = null;
 let currentSession = null;
-let networkAddresses = [];
+let reconnectDelay = RECONNECT_BASE_MS;
 let toastTimer;
 let rulesLoaded = false;
 let logHidden = localStorage.getItem("draft-holdem-hide-log") !== "false";
@@ -146,19 +153,61 @@ function sessionKey(code) {
   return `draft-holdem-session-${String(code).toUpperCase()}`;
 }
 
-function connect() {
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}`);
+function storedSession(code) {
+  return JSON.parse(localStorage.getItem(sessionKey(code)) || "null");
+}
+
+// This page is served from Vercel while the game server runs on its own host, so the
+// endpoint comes from public/config.js: the committed default points at `wrangler dev`
+// and the Vercel build writes the deployed URL in.
+function gameServerSocketUrl(path) {
+  const configured = window.DRAFT_HOLDEM_CONFIG?.gameServerUrl;
+  if (!configured) throw new Error("No game server is configured for this site");
+  const { protocol, host } = new URL(configured);
+  const scheme = protocol === "https:" || protocol === "wss:" ? "wss:" : "ws:";
+  return `${scheme}//${host}${path}`;
+}
+
+/**
+ * Every room has its own address on the game server, so a socket belongs to exactly one
+ * room: `/room/new` mints a code and `/room/CODE` joins or resumes an existing one.
+ * `announce` runs once the socket opens and states this connection's intent.
+ */
+function connect(path, announce) {
+  let url;
+  try {
+    url = gameServerSocketUrl(path);
+  } catch (error) {
+    setConnection("offline", "No game server");
+    showToast(error.message, true);
+    return;
+  }
+  setConnection("", "Connecting…");
+  socket = new WebSocket(url);
+  let opened = false;
   socket.addEventListener("open", () => {
+    opened = true;
+    reconnectDelay = RECONNECT_BASE_MS;
     setConnection("online", "Connected to host");
-    const code = new URLSearchParams(location.search).get("room")?.toUpperCase();
-    const saved = code ? JSON.parse(localStorage.getItem(sessionKey(code)) || "null") : null;
-    if (saved?.token) send("resume", { roomCode: code, token: saved.token });
-    else if (code) $("#room-code-input").value = code;
+    announce();
   });
   socket.addEventListener("close", () => {
+    // Only an established seat reconnects by itself: replaying create_room or join_room
+    // would mint a second room or claim a second seat.
+    if (!currentSession) {
+      // A socket that never opened could not reach the server; one that opened and has no
+      // session was ended on purpose, by a kick or a session that could not be restored.
+      setConnection("offline", opened ? "Not connected" : "Could not reach the game server");
+      return;
+    }
+    const { roomCode } = currentSession;
     setConnection("offline", "Disconnected — reconnecting");
-    setTimeout(connect, 1600);
+    setTimeout(() => {
+      const saved = storedSession(roomCode);
+      if (saved?.token) connect(`/room/${roomCode}`, () => send("resume", { token: saved.token }));
+      else setConnection("offline", "Not connected");
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
   });
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
@@ -198,16 +247,6 @@ function connect() {
   });
 }
 
-async function loadNetworkAddresses() {
-  try {
-    const response = await fetch("/network");
-    networkAddresses = (await response.json()).addresses ?? [];
-  } catch {
-    networkAddresses = [location.origin];
-  }
-  if (currentState?.mode === "LOBBY") renderLobby(currentState);
-}
-
 function showView(view) {
   [homeView, lobbyView, gameView].forEach((candidate) => candidate.classList.toggle("hidden", candidate !== view));
 }
@@ -230,11 +269,8 @@ function renderLobby(state) {
   const viewer = state.players.find((player) => player.id === state.viewerId);
   $("#lobby-code").textContent = state.roomCode;
 
-  const openedOnLoopback = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
-  const shareOrigin = openedOnLoopback
-    ? networkAddresses.find((address) => !address.includes("localhost")) ?? location.origin
-    : location.origin;
-  $("#share-address").textContent = `${shareOrigin}/?room=${state.roomCode}`;
+  // Players load the client from this same origin, wherever they are.
+  $("#share-address").textContent = `${location.origin}/?room=${state.roomCode}`;
 
   const seats = [...state.players];
   while (seats.length < 6) seats.push(null);
@@ -556,11 +592,11 @@ function renderActionDock(state) {
   const dock = $("#action-dock");
 
   if (game.players.some((player) => player.handChipDelta === undefined || player.sittingOut === undefined || player.refillCount === undefined)) {
-    dock.innerHTML = `<div class="version-warning"><b>HOST UPDATE REQUIRED</b><span>Restart start-game.bat, refresh this page, then create a new room.</span></div>`;
+    dock.innerHTML = OUTDATED_VERSION_WARNING;
     return;
   }
   if (game.phase === "DRAFT_BIDDING" && game.draftBidStage === undefined) {
-    dock.innerHTML = `<div class="version-warning"><b>HOST UPDATE REQUIRED</b><span>Restart start-game.bat, refresh this page, then create a new room.</span></div>`;
+    dock.innerHTML = OUTDATED_VERSION_WARNING;
     return;
   }
   if (game.phase === "HAND_COMPLETE") {
@@ -701,8 +737,20 @@ function renderSidebar(game) {
   $("#pots-list").innerHTML = pots.map((pot, index) => `<div class="pot-row"><span>${index === 0 ? "Main pot" : `Side pot ${index}`}</span><b>${pot.amount}</b></div>`).join("");
 }
 
-$("#create-room-button").addEventListener("click", () => send("create_room", { name: $("#player-name").value }));
-$("#join-room-button").addEventListener("click", () => send("join_room", { name: $("#player-name").value, roomCode: $("#room-code-input").value }));
+$("#create-room-button").addEventListener("click", () => {
+  const name = $("#player-name").value;
+  connect("/room/new", () => send("create_room", { name }));
+});
+$("#join-room-button").addEventListener("click", () => {
+  const code = $("#room-code-input").value.trim().toUpperCase();
+  // Checked here so a mistyped code reports itself instead of failing as a dead socket.
+  if (!ROOM_CODE_PATTERN.test(code)) {
+    showToast("Enter the 8-character room code", true);
+    return;
+  }
+  const name = $("#player-name").value;
+  connect(`/room/${code}`, () => send("join_room", { name }));
+});
 $("#room-code-input").addEventListener("input", (event) => { event.target.value = event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, "").slice(0, 8); });
 $("#room-code-input").addEventListener("keydown", (event) => { if (event.key === "Enter") $("#join-room-button").click(); });
 $("#player-name").addEventListener("keydown", (event) => { if (event.key === "Enter") $("#create-room-button").click(); });
@@ -787,11 +835,11 @@ async function openRules() {
     return;
   }
   try {
-    const response = await fetch("/rules");
+    // A static fragment served from this origin, so it needs no game server.
+    const response = await fetch("/rules-guide.html");
     if (!response.ok) throw new Error("Could not load the player guide");
-    const { html } = await response.json();
     const content = $("#rules-content");
-    content.innerHTML = html;
+    content.innerHTML = await response.text();
     guideSlides = [...content.querySelectorAll(":scope > .guide-hero, :scope > .guide-section")];
     guideSlides.forEach((slide) => slide.classList.add("guide-slide"));
     $("#guide-slide-dots").innerHTML = guideSlides.map((slide, index) => {
@@ -850,6 +898,14 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("pointerdown", unlockAudio, { capture: true });
 
 updateSoundSettingsUi();
-loadNetworkAddresses();
-connect();
+
+// An invite link carries the room code. A stored token means this browser already holds
+// a seat in that room, so it goes straight back in; otherwise the code is pre-filled and
+// the player joins with a name of their own.
+const invitedRoomCode = new URLSearchParams(location.search).get("room")?.trim().toUpperCase() ?? "";
+if (ROOM_CODE_PATTERN.test(invitedRoomCode)) {
+  const saved = storedSession(invitedRoomCode);
+  if (saved?.token) connect(`/room/${invitedRoomCode}`, () => send("resume", { token: saved.token }));
+  else $("#room-code-input").value = invitedRoomCode;
+}
 setInterval(updateTurnTimer, 100);
