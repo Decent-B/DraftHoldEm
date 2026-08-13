@@ -151,35 +151,38 @@ Boris Cherny (creator of Claude Code) keeps his team's file around 100 lines. Un
 **Fill this in per project. Keep it specific. Delete sections that don't apply.**
 
 ### Stack
-- Language and version:
-- Framework(s):
-- Package manager:
-- Runtime / deployment target:
+- Language and version: JavaScript, ES modules, Node 20+ for tooling
+- Framework(s): none. No build step for the client, no runtime dependencies
+- Package manager: npm
+- Runtime / deployment target: Cloudflare Workers + Durable Objects for the game server; Vercel static hosting for `public/`, deployed from `main`
 
 ### Commands
-- Install: `TODO`
-- Build: `TODO`
-- Test (all): `TODO`
-- Test (single file): `TODO`
-- Lint: `TODO`
-- Typecheck: `TODO`
-- Run locally: `TODO`
+- Install: `npm install`
+- Build: none for the client beyond `scripts/build-client-config.mjs`, which Vercel runs
+- Test (all): `npm test`
+- Test (single file): `node --test test/engine.test.js`
+- Lint / typecheck: none configured
+- Run locally: `npm run dev` (client on 4173, Worker on 8787)
+- Deploy the game server: `npm run deploy`
 
 Prefer single-file or single-test runs during iteration. Full suites are for the final verification pass.
 
 ### Layout
-- Source lives in: `TODO`
-- Tests live in: `TODO`
-- Do not modify: `TODO` (generated code, vendored deps, legacy areas)
+- Source lives in: `src/` (`worker.js` routing, `room.js` Durable Object, `engine.js` and `cards.js` rules, `security.js` limits)
+- Client lives in: `public/`, served as static files
+- Tests live in: `test/`; browser flows in `scripts/ui-smoke.mjs`
+- Do not modify: `public/config.js` for a deployment — it is generated from `GAME_SERVER_URL`
 
 ### Conventions specific to this repo
-- Naming: `TODO`
-- Import style: `TODO`
-- Error handling pattern: `TODO`
-- Testing pattern and framework: `TODO`
+- Naming: descriptive camelCase; no abbreviations in identifiers
+- Import style: explicit `node:` prefixes, relative paths with extensions
+- Error handling pattern: `throw new Error("player-facing sentence")`; the room catches and returns it as an `error` message on that socket
+- Testing pattern and framework: `node:test` with `node:assert/strict`; the Worker tests drive a real `wrangler dev` over real WebSockets
 
 ### Forbidden
-- `TODO`: things that look reasonable but will break this project.
+- Do not put the WebSocket server behind Vercel Functions or any serverless request model: room state, hidden cards and turn timers need one stateful process per room.
+- Do not use the Durable Object Hibernation API here: it forbids `setTimeout`, which the turn timers depend on.
+- Do not add runtime dependencies to the game server; the Workers runtime provides WebSockets natively.
 
 ---
 
@@ -201,6 +204,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Keep guidance supporting copy at least 15px on desktop and section summaries at least 17px; compact game-table typography does not apply to the help panel.
 - Keep table contribution chip values clear of the total-pot readout and seat badges, and use the active-avatar ring instead of a center Poker turn indicator.
 - Keep the table, seats, cards, and action dock inside supported 320x568-and-larger viewports without requiring browser zoom or fullscreen.
+- A socket belongs to one room: connect to `/room/new` to create or `/room/CODE` to join, and never auto-replay `create_room` or `join_room` on reconnect — only `resume`.
+- Pixel thresholds in `scripts/ui-smoke.mjs` shift with the browser's font metrics; confirm a layout failure against unmodified `main` in the same browser before treating it as a regression.
 
 ---
 

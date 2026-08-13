@@ -5,6 +5,10 @@ node_modules/
 artifacts/
 coverage/
 
+# Deployment tool state
+.vercel/
+.wrangler/
+
 # Logs and runtime files
 *.log
 *.pid

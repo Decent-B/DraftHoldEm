@@ -22,7 +22,7 @@
       </button>
       <div class="topbar-center" id="connection-label">
         <span class="status-dot"></span>
-        <span>Connecting…</span>
+        <span>Not connected</span>
       </div>
       <div class="topbar-actions">
         <span class="room-pill hidden" id="room-pill">ROOM <b>—</b></span>
@@ -55,7 +55,7 @@
           <div class="feature-row" aria-label="Features">
             <span><b>2–6</b> players</span>
             <span><b>4</b> rounds</span>
-            <span><b>LAN</b> private</span>
+            <span><b>Private</b> rooms</span>
           </div>
         </div>
 
@@ -100,8 +100,8 @@
           <div class="share-callout">
             <span class="share-icon">⌁</span>
             <div>
-              <b>Play on the same network</b>
-              <p id="share-address">Share the room code and LAN address shown on the host.</p>
+              <b>Invite your friends</b>
+              <p id="share-address">Share this link with anyone you want at the table.</p>
             </div>
           </div>
           <div class="seat-list" id="lobby-seats"></div>
@@ -199,6 +199,8 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <!-- Loaded first, and not as a module, so the game server endpoint is set before app.js runs. -->
+    <script src="/config.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

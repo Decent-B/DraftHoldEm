@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "draft-holdem-server",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-13",
+  // The game engine imports node:crypto for shuffling and player ids.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // One Durable Object per room. New namespaces are SQLite-backed; this room keeps its
+  // state in memory only, so no storage API is used.
+  "exports": {
+    "Room": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "Room" }]
+  },
+
+  // Creating a room instantiates a Durable Object, so cap it per client IP.
+  "ratelimits": [
+    {
+      "name": "ROOM_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
+
+  // Exact browser origin of the Vercel-hosted client. Sockets from anywhere else are
+  // refused. Keep this in step with connect-src in vercel.json.
+  "vars": {
+    "ALLOWED_ORIGINS": "https://draft-hold-em.binhnguyen.dev"
+  },
+
+  // Requires the binhnguyen.dev zone on Cloudflare DNS. Without it, remove this block
+  // and point GAME_SERVER_URL at the workers.dev URL instead.
+  "routes": [{ "pattern": "ws.draft-hold-em.binhnguyen.dev", "custom_domain": true }],
+  "workers_dev": true
+}

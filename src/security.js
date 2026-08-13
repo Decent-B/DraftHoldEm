@@ -1,30 +1,21 @@
-const DEFAULT_MAX_CONNECTIONS = 500;
-const DEFAULT_MAX_CONNECTIONS_PER_IP = 20;
+// Limit and origin policy shared by the Worker entry point and the Room Durable
+// Object. Values come from the Worker's `env` bindings, declared in wrangler.jsonc.
+
 const DEFAULT_MAX_MESSAGES_PER_WINDOW = 40;
 const DEFAULT_MESSAGE_WINDOW_MS = 5_000;
-const DEFAULT_MAX_ROOM_ATTEMPTS_PER_WINDOW = 30;
-const DEFAULT_ROOM_ATTEMPT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_PAYLOAD_BYTES = 16 * 1024;
-const DEFAULT_MAX_ROOMS = 500;
+const DEFAULT_MAX_CONNECTIONS_PER_ROOM = 24;
 const DEFAULT_ROOM_IDLE_MS = 60 * 60 * 1000;
 const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
-function integerSetting(name, fallback, minimum, maximum) {
-  const rawValue = process.env[name];
+function integerSetting(env, name, fallback, minimum, maximum) {
+  const rawValue = env[name];
   if (rawValue === undefined || rawValue === "") return fallback;
   const value = Number(rawValue);
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
     throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
   }
   return value;
-}
-
-function booleanSetting(name, fallback) {
-  const rawValue = process.env[name];
-  if (rawValue === undefined || rawValue === "") return fallback;
-  if (rawValue === "true") return true;
-  if (rawValue === "false") return false;
-  throw new Error(`${name} must be true or false`);
 }
 
 export function parseAllowedOrigins(rawValue = "") {
@@ -44,65 +35,30 @@ export function parseAllowedOrigins(rawValue = "") {
   return origins;
 }
 
-export function loadSecurityConfig() {
-  const production = process.env.NODE_ENV === "production";
-  const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
-  if (production && allowedOrigins.size === 0) {
-    throw new Error("ALLOWED_ORIGINS is required when NODE_ENV=production");
-  }
+export function loadSecurityConfig(env = {}) {
   return {
-    production,
-    host: process.env.HOST || (production ? "127.0.0.1" : "0.0.0.0"),
-    allowedOrigins,
-    trustProxy: booleanSetting("TRUST_PROXY", false),
-    lanDiscovery: booleanSetting("ENABLE_LAN_DISCOVERY", !production),
-    maxConnections: integerSetting("MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS, 1, 10_000),
-    maxConnectionsPerIp: integerSetting("MAX_CONNECTIONS_PER_IP", DEFAULT_MAX_CONNECTIONS_PER_IP, 1, 1_000),
-    maxMessagesPerWindow: integerSetting("MAX_MESSAGES_PER_WINDOW", DEFAULT_MAX_MESSAGES_PER_WINDOW, 5, 1_000),
-    messageWindowMs: integerSetting("MESSAGE_WINDOW_MS", DEFAULT_MESSAGE_WINDOW_MS, 1_000, 60_000),
-    maxRoomAttemptsPerWindow: integerSetting("MAX_ROOM_ATTEMPTS_PER_WINDOW", DEFAULT_MAX_ROOM_ATTEMPTS_PER_WINDOW, 5, 1_000),
-    roomAttemptWindowMs: integerSetting("ROOM_ATTEMPT_WINDOW_MS", DEFAULT_ROOM_ATTEMPT_WINDOW_MS, 10_000, 60 * 60 * 1000),
-    maxPayloadBytes: integerSetting("MAX_PAYLOAD_BYTES", DEFAULT_MAX_PAYLOAD_BYTES, 1_024, 1024 * 1024),
-    maxRooms: integerSetting("MAX_ROOMS", DEFAULT_MAX_ROOMS, 1, 100_000),
-    roomIdleMs: integerSetting("ROOM_IDLE_MS", DEFAULT_ROOM_IDLE_MS, 60_000, 24 * 60 * 60 * 1000),
-    sessionTtlMs: integerSetting("SESSION_TTL_MS", DEFAULT_SESSION_TTL_MS, 5 * 60 * 1000, 7 * 24 * 60 * 60 * 1000),
+    allowedOrigins: parseAllowedOrigins(env.ALLOWED_ORIGINS),
+    maxMessagesPerWindow: integerSetting(env, "MAX_MESSAGES_PER_WINDOW", DEFAULT_MAX_MESSAGES_PER_WINDOW, 5, 1_000),
+    messageWindowMs: integerSetting(env, "MESSAGE_WINDOW_MS", DEFAULT_MESSAGE_WINDOW_MS, 1_000, 60_000),
+    maxPayloadBytes: integerSetting(env, "MAX_PAYLOAD_BYTES", DEFAULT_MAX_PAYLOAD_BYTES, 1_024, 1024 * 1024),
+    maxConnectionsPerRoom: integerSetting(env, "MAX_CONNECTIONS_PER_ROOM", DEFAULT_MAX_CONNECTIONS_PER_ROOM, 6, 1_000),
+    roomIdleMs: integerSetting(env, "ROOM_IDLE_MS", DEFAULT_ROOM_IDLE_MS, 60_000, 24 * 60 * 60 * 1000),
+    sessionTtlMs: integerSetting(env, "SESSION_TTL_MS", DEFAULT_SESSION_TTL_MS, 5 * 60 * 1000, 7 * 24 * 60 * 60 * 1000),
   };
 }
 
-export function isWebSocketOriginAllowed(request, config) {
-  const origin = request.headers.origin;
-  if (!origin) return !config.production;
-  let parsedOrigin;
+// Browsers always send Origin on a WebSocket handshake, so an allowlist is the
+// defence against another site opening sockets on a visitor's behalf. An empty
+// allowlist means ALLOWED_ORIGINS was not configured, which only happens in local
+// development; every deployment sets it.
+export function isWebSocketOriginAllowed(origin, allowedOrigins) {
+  if (allowedOrigins.size === 0) return true;
+  if (!origin) return false;
   try {
-    parsedOrigin = new URL(origin);
+    return allowedOrigins.has(new URL(origin).origin);
   } catch {
     return false;
   }
-  if (!["http:", "https:"].includes(parsedOrigin.protocol)) return false;
-  if (config.allowedOrigins.size > 0) return config.allowedOrigins.has(parsedOrigin.origin);
-  return parsedOrigin.host === request.headers.host;
-}
-
-export function clientAddress(request, trustProxy = false) {
-  if (trustProxy) {
-    const forwarded = request.headers["x-forwarded-for"];
-    const firstAddress = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0];
-    if (firstAddress?.trim()) return firstAddress.trim();
-  }
-  return request.socket.remoteAddress || "unknown";
-}
-
-export function securityHeaders(production = false) {
-  const headers = {
-    "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()",
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-  };
-  if (production) headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
-  return headers;
 }
 
 export function consumeMessageAllowance(state, now, maximum, windowMs) {
