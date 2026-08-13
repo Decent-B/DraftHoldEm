@@ -239,9 +239,15 @@ export class DraftHoldemGame {
 
   openMarket(round) {
     this.round = round;
-    const swapPositions = round % 2 === 0;
-    this.smallBlindSeatIndex = swapPositions ? this.initialBigBlindSeatIndex : this.initialSmallBlindSeatIndex;
-    this.bigBlindSeatIndex = swapPositions ? this.initialSmallBlindSeatIndex : this.initialBigBlindSeatIndex;
+    const inHand = (player) => player.inHand;
+    let smallBlindPlayer = this.players.find((player) => player.seatIndex === this.initialSmallBlindSeatIndex);
+    let bigBlindPlayer = this.players.find((player) => player.seatIndex === this.initialBigBlindSeatIndex);
+    for (let positionRound = 1; positionRound < round; positionRound += 1) {
+      smallBlindPlayer = this.nextSeat(smallBlindPlayer.seatIndex, inHand);
+      bigBlindPlayer = this.nextSeat(bigBlindPlayer.seatIndex, inHand);
+    }
+    this.smallBlindSeatIndex = smallBlindPlayer.seatIndex;
+    this.bigBlindSeatIndex = bigBlindPlayer.seatIndex;
     const layout = marketLayout(this.playerCountAtStart, round);
     this.market = [];
     for (let index = 0; index < layout.total; index += 1) {
@@ -296,7 +302,7 @@ export class DraftHoldemGame {
     const blindIds = new Set(currentBlinds.map((player) => player.id));
     const remaining = resolveReverseBlindOrder(
       players.filter((player) => !blindIds.has(player.id)),
-      this.initialBigBlindSeatIndex,
+      this.bigBlindSeatIndex,
       this.players.length,
     );
     return [...currentBlinds, ...remaining].map((player) => player.id);
@@ -437,7 +443,7 @@ export class DraftHoldemGame {
       ? this.players.find((player) => (
         player.seatIndex === this.smallBlindSeatIndex && player.inHand && !player.folded && !player.allIn
       )) ?? this.nextSeat(this.smallBlindSeatIndex, (player) => player.inHand && !player.folded && !player.allIn)
-      : this.nextSeat(this.initialBigBlindSeatIndex, (player) => player.inHand && !player.folded && !player.allIn);
+      : this.nextSeat(this.bigBlindSeatIndex, (player) => player.inHand && !player.folded && !player.allIn);
     this.betting.actingPlayerId = firstActor?.id ?? null;
     if (!firstActor) this.finishBettingStreet();
   }

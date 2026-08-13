@@ -358,6 +358,20 @@ try {
     return minutes * 60 + seconds;
   });
   if (draftSeconds < 1 || draftSeconds > 10) throw new Error(`Draft timer ignored host setting: ${draftSeconds}s`);
+  const topControlSizes = await host.evaluate(() => ({
+    seatButtonHeight: document.querySelector("#seat-toggle-button").getBoundingClientRect().height,
+    seatButtonFont: parseFloat(getComputedStyle(document.querySelector("#seat-toggle-button")).fontSize),
+    logButtonHeight: document.querySelector("#log-toggle-button").getBoundingClientRect().height,
+    logButtonFont: parseFloat(getComputedStyle(document.querySelector("#log-toggle-button")).fontSize),
+    timerFont: parseFloat(getComputedStyle(document.querySelector("#turn-timer strong")).fontSize),
+    potLabelFont: parseFloat(getComputedStyle(document.querySelector(".pot-compact span")).fontSize),
+    potValueFont: parseFloat(getComputedStyle(document.querySelector(".pot-compact strong")).fontSize),
+  }));
+  if (topControlSizes.seatButtonHeight < 36 || topControlSizes.seatButtonFont < 10
+    || topControlSizes.logButtonHeight < 36 || topControlSizes.logButtonFont < 10
+    || topControlSizes.timerFont < 13 || topControlSizes.potLabelFont < 10 || topControlSizes.potValueFont < 17) {
+    throw new Error(`Top game controls are still too small: ${JSON.stringify(topControlSizes)}`);
+  }
   const compactChrome = await host.evaluate(() => ({
     topbar: document.querySelector(".topbar").getBoundingClientRect().height,
     actionDock: document.querySelector("#action-dock").getBoundingClientRect().height,
