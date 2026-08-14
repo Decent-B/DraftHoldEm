@@ -210,35 +210,52 @@ test("six-player games deal an eight-card market and act after the big blind", (
   assert.equal(game.betting.actingPlayerId, "utg");
 });
 
-test("three- and four-player blinds swap each round and zero bids start BB then SB", () => {
-  const threePlayerGame = new DraftHoldemGame([
-    { id: "utg", name: "UTG" },
-    { id: "sb", name: "SB" },
-    { id: "bb", name: "BB" },
+test("three-player positions rotate together each Draft round", () => {
+  const game = new DraftHoldemGame([
+    { id: "a", name: "A" },
+    { id: "b", name: "B" },
+    { id: "c", name: "C" },
   ]);
-  completeDraft(threePlayerGame);
-  threePlayerGame.finishBettingStreet();
-  assert.equal(threePlayerGame.bigBlindSeatIndex, threePlayerGame.player("sb").seatIndex);
-  assert.equal(threePlayerGame.smallBlindSeatIndex, threePlayerGame.player("bb").seatIndex);
-  for (const player of threePlayerGame.activePlayers()) threePlayerGame.submitDraftBid(player.id, 0);
-  assert.deepEqual(threePlayerGame.pickOrder, ["sb", "bb", "utg"]);
-  pickAllMarketCards(threePlayerGame);
-  assert.equal(threePlayerGame.betting.actingPlayerId, "utg");
+  const rounds = [
+    { dealer: "a", smallBlind: "b", bigBlind: "c" },
+    { dealer: "b", smallBlind: "c", bigBlind: "a" },
+    { dealer: "c", smallBlind: "a", bigBlind: "b" },
+    { dealer: "a", smallBlind: "b", bigBlind: "c" },
+  ];
 
-  const fourPlayerGame = new DraftHoldemGame([
-    { id: "dealer", name: "Dealer" },
-    { id: "sb", name: "SB" },
-    { id: "bb", name: "BB" },
-    { id: "utg", name: "UTG" },
+  for (const [index, expected] of rounds.entries()) {
+    assert.equal(game.players.find((player) => player.seatIndex === game.dealerSeatIndex).id, expected.dealer, `round ${index + 1} dealer`);
+    assert.equal(game.players.find((player) => player.seatIndex === game.smallBlindSeatIndex).id, expected.smallBlind, `round ${index + 1} small blind`);
+    assert.equal(game.players.find((player) => player.seatIndex === game.bigBlindSeatIndex).id, expected.bigBlind, `round ${index + 1} big blind`);
+    completeDraft(game);
+    if (index < rounds.length - 1) game.finishBettingStreet();
+  }
+});
+
+test("four-player positions rotate clockwise together each Draft round", () => {
+  const game = new DraftHoldemGame([
+    { id: "c", name: "C" },
+    { id: "b", name: "B" },
+    { id: "a", name: "A" },
+    { id: "d", name: "D" },
   ]);
-  completeDraft(fourPlayerGame);
-  fourPlayerGame.finishBettingStreet();
-  assert.equal(fourPlayerGame.bigBlindSeatIndex, fourPlayerGame.player("sb").seatIndex);
-  assert.equal(fourPlayerGame.smallBlindSeatIndex, fourPlayerGame.player("bb").seatIndex);
-  for (const player of fourPlayerGame.activePlayers()) fourPlayerGame.submitDraftBid(player.id, 0);
-  assert.deepEqual(fourPlayerGame.pickOrder, ["sb", "bb", "dealer", "utg"]);
-  pickAllMarketCards(fourPlayerGame);
-  assert.equal(fourPlayerGame.betting.actingPlayerId, "utg");
+  const rounds = [
+    { smallBlind: "b", bigBlind: "a", firstActor: "d", zeroBidOrder: ["a", "b", "c", "d"] },
+    { smallBlind: "a", bigBlind: "d", firstActor: "c", zeroBidOrder: ["d", "a", "b", "c"] },
+    { smallBlind: "d", bigBlind: "c", firstActor: "b", zeroBidOrder: ["c", "d", "a", "b"] },
+    { smallBlind: "c", bigBlind: "b", firstActor: "a", zeroBidOrder: ["b", "c", "d", "a"] },
+  ];
+
+  for (const [index, expected] of rounds.entries()) {
+    const publicState = game.stateFor("a");
+    assert.equal(publicState.players.find((player) => player.seatIndex === publicState.smallBlindSeatIndex).name, expected.smallBlind.toUpperCase(), `round ${index + 1} displayed SB`);
+    assert.equal(publicState.players.find((player) => player.seatIndex === publicState.bigBlindSeatIndex).name, expected.bigBlind.toUpperCase(), `round ${index + 1} displayed BB`);
+    for (const player of game.activePlayers()) game.submitDraftBid(player.id, 0);
+    assert.deepEqual(game.pickOrder, expected.zeroBidOrder, `round ${index + 1} zero-bid order`);
+    pickAllMarketCards(game);
+    assert.equal(game.betting.actingPlayerId, expected.firstActor, `round ${index + 1} first actor`);
+    if (index < rounds.length - 1) game.finishBettingStreet();
+  }
 });
 
 test("draft timeouts submit zero bids and auto-pick an available card", () => {

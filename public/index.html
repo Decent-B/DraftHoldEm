@@ -89,7 +89,6 @@
           <div class="section-heading">
             <div>
               <p class="overline">LOBBY</p>
-              <h2>Bring your table together</h2>
             </div>
             <div class="code-badge">
               <span>ROOM CODE</span>
@@ -127,11 +126,6 @@
             <label><span>Draft timer</span><div class="setting-with-unit"><input id="setting-draft-time" type="number" min="10" max="120"><small>sec</small></div></label>
             <label><span>Bet timer</span><div class="setting-with-unit"><input id="setting-bet-time" type="number" min="10" max="120"><small>sec</small></div></label>
           </div>
-          <div class="rules-summary">
-            <div><span class="summary-icon cyan">◆</span><p><b>Secret bids</b><small>Every bid is spent</small></p></div>
-            <div><span class="summary-icon red">●</span><p><b>No-limit</b><small>All-in and side pots</small></p></div>
-            <div><span class="summary-icon gold">★</span><p><b>Best 5 of 6</b><small>Scored automatically</small></p></div>
-          </div>
         </aside>
       </section>
 
@@ -144,14 +138,12 @@
               <button class="table-seat-button" id="seat-toggle-button" type="button">Sit out next hand</button>
               <button class="log-toggle-button" id="log-toggle-button" type="button" aria-pressed="false"><span>Hide log</span></button>
               <div class="turn-timer hidden" id="turn-timer" role="timer" aria-live="off"><span>TIME</span><strong>00:30</strong></div>
-              <div class="pot-compact"><span>POT</span><strong id="pot-label">0</strong><i class="chip-icon gold-chip"></i></div>
             </div>
           </div>
 
           <div class="table-wrap">
             <div class="poker-table">
               <div class="table-rail"></div>
-              <div class="felt-lines" aria-hidden="true"></div>
               <div class="table-center">
                 <div class="market-title"><span id="market-kicker">CARD MARKET</span><b id="market-instruction">Dealing cards…</b></div>
                 <div class="market-cards" id="market-cards"></div>
@@ -159,8 +151,8 @@
                 <div class="pot-stack" id="pot-stack"><i></i><i></i><i></i><span><small>TOTAL POT</small><b>0</b></span></div>
               </div>
               <div class="table-contributions" id="table-contributions" aria-label="Player contributions"></div>
-              <div class="player-seats" id="player-seats"></div>
             </div>
+            <div class="player-seats" id="player-seats"></div>
           </div>
 
           <div class="action-dock" id="action-dock"></div>

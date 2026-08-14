@@ -204,6 +204,97 @@ try {
   await guest.screenshot({ path: "artifacts/sound-settings-mobile.png" });
   await guest.click("#sound-settings-button");
 
+  const fourPlayerContexts = await Promise.all(Array.from({ length: 4 }, () => browser.newContext({
+    viewport: { width: 1366, height: 768 },
+    deviceScaleFactor: 1,
+  })));
+  await Promise.all(fourPlayerContexts.map((context) => context.addInitScript(() => {
+    localStorage.setItem("draft-holdem-sound-settings", JSON.stringify({ music: 0, effects: 0 }));
+  })));
+  const fourPlayers = await Promise.all(fourPlayerContexts.map((context) => context.newPage()));
+  const fourPlayerNames = ["C", "B", "A", "D"];
+  await Promise.all(fourPlayers.map((page) => page.goto(baseUrl, { waitUntil: "networkidle" })));
+  await fourPlayers[0].fill("#player-name", fourPlayerNames[0]);
+  await fourPlayers[0].click("#create-room-button");
+  await fourPlayers[0].waitForSelector("#lobby-view:not(.hidden)");
+  const fourPlayerCode = (await fourPlayers[0].textContent("#lobby-code")).trim();
+  for (let index = 1; index < fourPlayers.length; index += 1) {
+    await fourPlayers[index].goto(`${baseUrl}/?room=${fourPlayerCode}`, { waitUntil: "networkidle" });
+    await fourPlayers[index].fill("#player-name", fourPlayerNames[index]);
+    await fourPlayers[index].click("#join-room-button");
+    await fourPlayers[index].waitForSelector("#lobby-view:not(.hidden)");
+  }
+  await fourPlayers[0].waitForFunction(() => document.querySelectorAll(".lobby-seat:not(.open)").length === 4);
+  await Promise.all(fourPlayers.map((page) => page.click("#ready-button")));
+  await fourPlayers[0].waitForFunction(() => !document.querySelector("#start-button").disabled);
+  await fourPlayers[0].click("#start-button");
+  await Promise.all(fourPlayers.map((page) => page.waitForSelector("#lock-bid-button")));
+  const renderedBlinds = (page) => page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll(".player-seat")].map((seat) => [
+      seat.querySelector(".seat-name").textContent.replace(/\s*YOU\s*$/, "").trim(),
+      seat.querySelector(".seat-badge.blind")?.textContent.trim() ?? null,
+    ]),
+  ));
+  const roundOneBlinds = await renderedBlinds(fourPlayers[0]);
+  if (roundOneBlinds.A !== "BB" || roundOneBlinds.B !== "SB" || roundOneBlinds.C || roundOneBlinds.D) {
+    throw new Error(`Four-player Round 1 blind badges are wrong: ${JSON.stringify(roundOneBlinds)}`);
+  }
+  const fourPlayersByName = Object.fromEntries(fourPlayerNames.map((name, index) => [name, fourPlayers[index]]));
+  await fourPlayersByName.A.fill("#bid-number", "1");
+  await fourPlayersByName.A.evaluate(() => {
+    document.querySelector("#bid-number").dataset.syncIdentity = "preserved";
+  });
+  await fourPlayersByName.B.click("#lock-bid-button");
+  await fourPlayersByName.A.waitForSelector(".contribution-stack.tokens.secret");
+  const preservedPendingBid = await fourPlayersByName.A.evaluate(() => ({
+    number: document.querySelector("#bid-number")?.value,
+    range: document.querySelector("#bid-range")?.value,
+    identity: document.querySelector("#bid-number")?.dataset.syncIdentity,
+    focused: document.activeElement?.id,
+    tokens: document.querySelector('.player-seat[data-position="bottom"] .token-value')?.textContent,
+  }));
+  if (preservedPendingBid.number !== "1"
+    || preservedPendingBid.range !== "1"
+    || preservedPendingBid.identity !== "preserved"
+    || preservedPendingBid.focused !== "bid-number"
+    || !preservedPendingBid.tokens?.includes("12")) {
+    throw new Error(`Pending Draft Token bid reset after another player acted: ${JSON.stringify(preservedPendingBid)}`);
+  }
+  await fourPlayersByName.A.click("#lock-bid-button");
+  await fourPlayersByName.A.waitForFunction(() => document.querySelector(".locked-panel b")?.textContent === "BID 1 LOCKED");
+  await fourPlayersByName.C.click("#lock-bid-button");
+  await fourPlayersByName.D.click("#lock-bid-button");
+  await fourPlayersByName.A.waitForFunction(() => document.querySelector('.player-seat[data-position="bottom"] .token-value')?.textContent.includes("11"));
+  for (const name of ["A", "B", "C", "D"]) {
+    await fourPlayersByName[name].waitForSelector("#market-cards [data-card-id]");
+    await fourPlayersByName[name].locator("#market-cards [data-card-id]").first().click();
+  }
+  await fourPlayersByName.D.waitForSelector('[data-poker-action="CALL"]');
+  await fourPlayersByName.D.click('[data-poker-action="CALL"]');
+  await fourPlayersByName.C.waitForSelector('[data-poker-action="CALL"]');
+  await fourPlayersByName.C.click('[data-poker-action="CALL"]');
+  await fourPlayersByName.B.waitForSelector('[data-poker-action="CALL"]');
+  await fourPlayersByName.B.click('[data-poker-action="CALL"]');
+  await fourPlayersByName.A.waitForSelector('[data-poker-action="CHECK"]');
+  await fourPlayersByName.A.click('[data-poker-action="CHECK"]');
+  await fourPlayers[0].waitForFunction(() => document.querySelector("#round-label")?.textContent.startsWith("ROUND 2"));
+  const roundTwoBlinds = await renderedBlinds(fourPlayers[0]);
+  if (roundTwoBlinds.D !== "BB" || roundTwoBlinds.A !== "SB" || roundTwoBlinds.B || roundTwoBlinds.C) {
+    throw new Error(`Four-player Round 2 blind badges are wrong: ${JSON.stringify(roundTwoBlinds)}`);
+  }
+  await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-blinds.png", fullPage: true });
+  await Promise.all(fourPlayers.map((page) => page.click("#lock-bid-button")));
+  for (const name of ["D", "A", "B", "C"]) {
+    await fourPlayersByName[name].waitForSelector("#market-cards [data-card-id]");
+    await fourPlayersByName[name].locator("#market-cards [data-card-id]").first().click();
+  }
+  await fourPlayers[0].waitForFunction(() => (
+    document.querySelector("#phase-label")?.textContent.trim() === "POKER BETTING"
+    && document.querySelector(".player-seat.is-turn .seat-name")?.textContent.replace(/\s*YOU\s*$/, "").trim() === "C"
+  ));
+  await fourPlayers[0].screenshot({ path: "artifacts/game-four-player-round2-utg.png", fullPage: true });
+  await Promise.all(fourPlayerContexts.map((context) => context.close()));
+
   const sixPlayerContexts = await Promise.all(Array.from({ length: 6 }, () => browser.newContext({
     viewport: { width: 1366, height: 768 },
     deviceScaleFactor: 1,
@@ -230,6 +321,7 @@ try {
   await Promise.all(sixPlayers.map((page) => page.waitForSelector("#game-view:not(.hidden)")));
   const sixPlayerLayout = await sixPlayers[0].evaluate(() => {
     const seats = [...document.querySelectorAll(".player-seat")];
+    const table = document.querySelector(".poker-table").getBoundingClientRect();
     const rects = seats.map((seat) => {
       const box = seat.getBoundingClientRect();
       return { position: seat.dataset.position, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
@@ -245,11 +337,13 @@ try {
       }
     }
     const cardRows = [...document.querySelectorAll(".seat-cards")].map((row) => row.getBoundingClientRect());
+    const overlapsTable = (box) => box.left < table.right && box.right > table.left && box.top < table.bottom && box.bottom > table.top;
     return {
       count: seats.length,
       positions: rects.map(({ position }) => position),
       overlaps,
       clippedCardRows: cardRows.filter((box) => box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight).length,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards")].filter((element) => overlapsTable(element.getBoundingClientRect())).length,
       marketCards: document.querySelectorAll("#market-cards .playing-card").length,
       horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
     };
@@ -259,6 +353,7 @@ try {
     || sixPlayerLayout.positions.join(",") !== expectedSixPositions.join(",")
     || sixPlayerLayout.overlaps.length
     || sixPlayerLayout.clippedCardRows
+    || sixPlayerLayout.playerContentOnTable
     || sixPlayerLayout.marketCards !== 8
     || sixPlayerLayout.horizontalOverflow > 1) {
     throw new Error(`Six-player table is not fully visible: ${JSON.stringify(sixPlayerLayout)}`);
@@ -267,18 +362,43 @@ try {
   await sixPlayers[1].setViewportSize({ width: 390, height: 844 });
   await sixPlayers[1].evaluate(() => window.scrollTo(0, 0));
   await sixPlayers[1].waitForTimeout(200);
-  const sixPlayerMobileLayout = await sixPlayers[1].evaluate(() => ({
-    clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
+  const sixPlayerMobileLayout = await sixPlayers[1].evaluate(() => {
+    const table = document.querySelector(".poker-table").getBoundingClientRect();
+    const overlapsTable = (box) => box.left < table.right && box.right > table.left && box.top < table.bottom && box.bottom > table.top;
+    const playerContent = [...document.querySelectorAll(".seat-shell, .seat-cards > *")].map((element) => ({
+      playerId: element.closest(".player-seat").dataset.playerId,
+      position: element.closest(".player-seat").dataset.position,
+      type: element.className,
+      box: element.getBoundingClientRect(),
+    }));
+    const playerContentOverlaps = [];
+    for (let left = 0; left < playerContent.length; left += 1) {
+      for (let right = left + 1; right < playerContent.length; right += 1) {
+        const a = playerContent[left];
+        const b = playerContent[right];
+        if (a.playerId !== b.playerId && a.box.left < b.box.right && a.box.right > b.box.left
+          && a.box.top < b.box.bottom && a.box.bottom > b.box.top) {
+          playerContentOverlaps.push(`${a.position} ${a.type}/${b.position} ${b.type}`);
+        }
+      }
+    }
+    return {
+      clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
       const box = row.getBoundingClientRect();
       return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
-    }).length,
-    clippedSeatShells: [...document.querySelectorAll(".seat-shell")].filter((shell) => {
-      const box = shell.getBoundingClientRect();
-      return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
-    }).length,
-    horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
-  }));
-  if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells || sixPlayerMobileLayout.horizontalOverflow > 1) {
+      }).length,
+      clippedSeatShells: [...document.querySelectorAll(".seat-shell")].filter((shell) => {
+        const box = shell.getBoundingClientRect();
+        return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
+      }).length,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlapsTable(element.getBoundingClientRect())).length,
+      playerContentOverlaps,
+      horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells
+    || sixPlayerMobileLayout.playerContentOnTable || sixPlayerMobileLayout.playerContentOverlaps.length
+    || sixPlayerMobileLayout.horizontalOverflow > 1) {
     throw new Error(`Six-player mobile table is clipped: ${JSON.stringify(sixPlayerMobileLayout)}`);
   }
   await sixPlayers[1].screenshot({ path: "artifacts/game-six-player-mobile.png", fullPage: true });
@@ -358,6 +478,19 @@ try {
     return minutes * 60 + seconds;
   });
   if (draftSeconds < 1 || draftSeconds > 10) throw new Error(`Draft timer ignored host setting: ${draftSeconds}s`);
+  const topControlSizes = await host.evaluate(() => ({
+    seatButtonHeight: document.querySelector("#seat-toggle-button").getBoundingClientRect().height,
+    seatButtonFont: parseFloat(getComputedStyle(document.querySelector("#seat-toggle-button")).fontSize),
+    logButtonHeight: document.querySelector("#log-toggle-button").getBoundingClientRect().height,
+    logButtonFont: parseFloat(getComputedStyle(document.querySelector("#log-toggle-button")).fontSize),
+    timerFont: parseFloat(getComputedStyle(document.querySelector("#turn-timer strong")).fontSize),
+    duplicatePotReadouts: document.querySelectorAll(".pot-compact").length,
+  }));
+  if (topControlSizes.seatButtonHeight < 36 || topControlSizes.seatButtonFont < 10
+    || topControlSizes.logButtonHeight < 36 || topControlSizes.logButtonFont < 10
+    || topControlSizes.timerFont < 13 || topControlSizes.duplicatePotReadouts) {
+    throw new Error(`Top game controls are still too small: ${JSON.stringify(topControlSizes)}`);
+  }
   const compactChrome = await host.evaluate(() => ({
     topbar: document.querySelector(".topbar").getBoundingClientRect().height,
     actionDock: document.querySelector("#action-dock").getBoundingClientRect().height,
@@ -449,6 +582,22 @@ try {
   if ((await guest.locator('.table-contribution[data-position="top"] .tokens.secret b').innerText()).trim() !== "?") {
     throw new Error("A secret opponent bid amount was revealed on the table");
   }
+  const draftChipVisual = await host.locator('.table-contribution[data-position="bottom"] .tokens.secret').evaluate((element) => {
+    const chip = element.querySelector(".contribution-pieces");
+    const containerStyle = getComputedStyle(element);
+    const chipStyle = getComputedStyle(chip);
+    return {
+      containerBackground: containerStyle.backgroundColor,
+      containerBorderWidth: parseFloat(containerStyle.borderTopWidth),
+      chipWidth: chip.getBoundingClientRect().width,
+      chipHeight: chip.getBoundingClientRect().height,
+      chipTransform: chipStyle.transform,
+    };
+  });
+  if (draftChipVisual.containerBackground !== "rgba(0, 0, 0, 0)" || draftChipVisual.containerBorderWidth !== 0
+    || draftChipVisual.chipWidth < 29 || draftChipVisual.chipHeight < 29 || draftChipVisual.chipTransform === "none") {
+    throw new Error(`Draft Token contribution is not a standalone diamond chip: ${JSON.stringify(draftChipVisual)}`);
+  }
   await guest.waitForSelector("#lock-bid-button");
   await guest.fill("#bid-number", "2");
   await guest.click("#lock-bid-button");
@@ -491,6 +640,7 @@ try {
   }
   const tableClearance = await host.evaluate(() => {
     const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+    const table = rect(".poker-table");
     const progress = rect("#phase-progress");
     const topSeat = rect('.player-seat[data-position="top"] .seat-shell');
     const bottomCards = rect('.player-seat[data-position="bottom"] .seat-cards');
@@ -506,6 +656,8 @@ try {
       actionDockTop: actionDock.top,
       contributionOverlapsPotValue: overlaps(bottomContribution, potValue),
       contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
+      ovalIndicators: document.querySelectorAll(".betting-oval, .draft-oval").length,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
     };
   });
   if (tableClearance.topSeatTop < tableClearance.progressBottom + 8) {
@@ -516,6 +668,12 @@ try {
   }
   if (tableClearance.contributionOverlapsPotValue || tableClearance.contributionOverlapsBadges) {
     throw new Error(`Bottom contribution overlaps the pot value or seat badges: ${JSON.stringify(tableClearance)}`);
+  }
+  if (tableClearance.ovalIndicators) {
+    throw new Error(`Table still contains oval indicators: ${JSON.stringify(tableClearance)}`);
+  }
+  if (tableClearance.playerContentOnTable) {
+    throw new Error(`Player hands or seats overlap the felt: ${JSON.stringify(tableClearance)}`);
   }
   await host.screenshot({ path: "artifacts/game-draft-desktop.png" });
   await host.evaluate(() => { window.__playedAudio = []; });
@@ -574,6 +732,8 @@ try {
       horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
       dockHeight: document.querySelector("#action-dock").getBoundingClientRect().height,
       bettingIndicatorVisible: getComputedStyle(document.querySelector(".market-title")).display !== "none",
+      draftOrderVisible: getComputedStyle(document.querySelector("#draft-order")).display !== "none",
+      draftTokenStacks: document.querySelectorAll(".table-contribution .tokens").length,
       contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
       contributionOverlapsTitle: contribution.left < marketTitle.right
         && contribution.right > marketTitle.left
@@ -582,11 +742,14 @@ try {
     };
   });
   if (mobileLayout.horizontalOverflow > 1 || mobileLayout.dockHeight > 150 || mobileLayout.bettingIndicatorVisible
+    || mobileLayout.draftOrderVisible
+    || mobileLayout.draftTokenStacks
     || mobileLayout.contributionOverlapsBadges || mobileLayout.contributionOverlapsTitle) {
     throw new Error(`Mobile betting layout is not compact and clear: ${JSON.stringify(mobileLayout)}`);
   }
   const responsiveViewports = [
-    { width: 320, height: 568, name: "small-phone" },
+    { width: 320, height: 568, name: "small-phone", maxCardWidth: 46 },
+    { width: 667, height: 375, name: "phone-landscape", maxCardWidth: 40 },
     { width: 768, height: 600, name: "compact-tablet" },
     { width: 1024, height: 600, name: "compact-laptop" },
   ];
@@ -594,22 +757,29 @@ try {
   for (const viewport of responsiveViewports) {
     await guest.setViewportSize(viewport);
     await guest.waitForTimeout(100);
-    responsiveLayouts.push(await guest.evaluate(({ name }) => {
+    responsiveLayouts.push(await guest.evaluate(({ name, maxCardWidth }) => {
       const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
       const topbar = rect(".topbar");
+      const roundStrip = rect(".round-strip");
       const topSeat = rect('.player-seat[data-position="top"] .seat-shell');
+      const topBadges = rect('.player-seat[data-position="top"] .seat-badges');
       const bottomCards = rect('.player-seat[data-position="bottom"] .seat-cards');
+      const bottomCard = rect('.player-seat[data-position="bottom"] .playing-card.small');
       const bottomContribution = rect('.table-contribution[data-position="bottom"] .poker-chip-pile');
       const bottomBadges = rect('.player-seat[data-position="bottom"] .seat-badges');
       const dock = rect("#action-dock");
+      const table = rect(".poker-table");
       const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
       return {
         name,
         horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
         verticalOverflow: document.documentElement.scrollHeight - innerHeight,
         topSeatClipped: topSeat.top < topbar.bottom - 1,
+        topBadgesCovered: topBadges.top < roundStrip.bottom + 1,
         bottomCardsClipped: bottomCards.bottom > dock.top + 1,
+        cardTooWide: maxCardWidth ? bottomCard.width > maxCardWidth : false,
         contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
+        playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
         dockClipped: dock.bottom > innerHeight + 1,
       };
     }, viewport));
@@ -618,8 +788,9 @@ try {
     }
   }
   const responsiveFailure = responsiveLayouts.find((layout) => layout.horizontalOverflow > 1
-    || layout.verticalOverflow > 1 || layout.topSeatClipped || layout.bottomCardsClipped
-    || layout.contributionOverlapsBadges || layout.dockClipped);
+    || layout.verticalOverflow > 1 || layout.topSeatClipped || layout.topBadgesCovered
+    || layout.bottomCardsClipped || layout.cardTooWide
+    || layout.contributionOverlapsBadges || layout.playerContentOnTable || layout.dockClipped);
   if (responsiveFailure) {
     throw new Error(`Game does not fit a supported viewport: ${JSON.stringify(responsiveLayouts)}`);
   }
@@ -632,6 +803,38 @@ try {
   await host.fill("#bid-number", "0");
   await host.click("#lock-bid-button");
   await guest.waitForSelector("#lock-bid-button");
+  await guest.setViewportSize({ width: 667, height: 375 });
+  await guest.waitForTimeout(100);
+  const draftLandscapeLayout = await guest.evaluate(() => {
+    const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+    const table = rect(".poker-table");
+    const roundStrip = rect(".round-strip");
+    const topBadges = rect('.player-seat[data-position="top"] .seat-badges');
+    const dock = rect("#action-dock");
+    const market = rect("#market-cards");
+    const pot = rect("#pot-stack");
+    const cards = [...document.querySelectorAll("#market-cards .playing-card")].map((card) => card.getBoundingClientRect());
+    const contributions = [...document.querySelectorAll(".table-contribution")].map((contribution) => contribution.getBoundingClientRect());
+    const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+    return {
+      horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+      verticalOverflow: document.documentElement.scrollHeight - innerHeight,
+      topBadgesCovered: topBadges.top < roundStrip.bottom + 1,
+      dockClipped: dock.bottom > innerHeight + 1,
+      cardsOutsideTable: cards.filter((card) => card.left < table.left || card.right > table.right || card.top < table.top || card.bottom > table.bottom).length,
+      contributionsOverlapCenter: contributions.filter((contribution) => overlaps(contribution, market) || overlaps(contribution, pot)).length,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
+      widestCard: Math.max(...cards.map((card) => card.width)),
+    };
+  });
+  if (draftLandscapeLayout.horizontalOverflow > 1 || draftLandscapeLayout.verticalOverflow > 1
+    || draftLandscapeLayout.topBadgesCovered || draftLandscapeLayout.dockClipped
+    || draftLandscapeLayout.cardsOutsideTable || draftLandscapeLayout.contributionsOverlapCenter
+    || draftLandscapeLayout.playerContentOnTable || draftLandscapeLayout.widestCard > 40) {
+    throw new Error(`Landscape Draft layout is not playable: ${JSON.stringify(draftLandscapeLayout)}`);
+  }
+  await guest.screenshot({ path: "artifacts/game-draft-phone-landscape.png" });
+  await guest.setViewportSize({ width: 390, height: 844 });
   await guest.fill("#bid-number", "0");
   await guest.click("#lock-bid-button");
   await host.waitForSelector("#market-cards [data-card-id]");
@@ -652,6 +855,22 @@ try {
   await host.evaluate(() => { window.__playedAudio = []; });
   await guest.click('[data-poker-action="FOLD"]');
   await host.waitForSelector(".result-panel");
+  await guest.waitForSelector(".result-panel");
+  const resultLayouts = await Promise.all([host, guest].map((page) => page.evaluate(() => {
+    const draftOrder = document.querySelector("#draft-order");
+    const bottomCards = document.querySelector('.player-seat[data-position="bottom"] .seat-cards').getBoundingClientRect();
+    const resultPanel = document.querySelector("#action-dock").getBoundingClientRect();
+    return {
+      draftOrderVisible: getComputedStyle(draftOrder).display !== "none",
+      bottomCardsOverlapWinner: bottomCards.left < resultPanel.right
+        && bottomCards.right > resultPanel.left
+        && bottomCards.top < resultPanel.bottom
+        && bottomCards.bottom > resultPanel.top,
+    };
+  })));
+  if (resultLayouts.some(({ draftOrderVisible, bottomCardsOverlapWinner }) => draftOrderVisible || bottomCardsOverlapWinner)) {
+    throw new Error(`Winner banner overlaps the completed-hand table: ${JSON.stringify(resultLayouts)}`);
+  }
   const payoutFeedback = await host.evaluate(() => ({
     animation: getComputedStyle(document.querySelector(".winner-chip-flight")).animationName,
     deltas: [...document.querySelectorAll(".seat-badge.chip-delta")].map((badge) => badge.textContent.trim()).sort(),
@@ -664,6 +883,7 @@ try {
   }
   await host.waitForTimeout(350);
   await host.screenshot({ path: "artifacts/game-result-chip-payout.png" });
+  await guest.screenshot({ path: "artifacts/game-result-mobile.png" });
   const nextHandTimer = await host.locator("#turn-timer").evaluate((element) => ({
     label: element.querySelector("span").textContent,
     seconds: Number(element.querySelector("strong").textContent.split(":")[1]),
