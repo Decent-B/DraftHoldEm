@@ -321,6 +321,8 @@ try {
   await Promise.all(sixPlayers.map((page) => page.waitForSelector("#game-view:not(.hidden)")));
   const sixPlayerLayout = await sixPlayers[0].evaluate(() => {
     const seats = [...document.querySelectorAll(".player-seat")];
+    const table = document.querySelector(".poker-table").getBoundingClientRect();
+    const draftOval = document.querySelector(".draft-oval").getBoundingClientRect();
     const rects = seats.map((seat) => {
       const box = seat.getBoundingClientRect();
       return { position: seat.dataset.position, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
@@ -336,11 +338,20 @@ try {
       }
     }
     const cardRows = [...document.querySelectorAll(".seat-cards")].map((row) => row.getBoundingClientRect());
+    const overlapsTable = (box) => box.left < table.right && box.right > table.left && box.top < table.bottom && box.bottom > table.top;
+    const contributionCentersInsideDraftOval = [...document.querySelectorAll(".table-contribution")].filter((element) => {
+      const box = element.getBoundingClientRect();
+      const horizontalDistance = ((box.left + box.right) / 2 - (draftOval.left + draftOval.right) / 2) / (draftOval.width / 2);
+      const verticalDistance = ((box.top + box.bottom) / 2 - (draftOval.top + draftOval.bottom) / 2) / (draftOval.height / 2);
+      return horizontalDistance ** 2 + verticalDistance ** 2 < 1;
+    }).length;
     return {
       count: seats.length,
       positions: rects.map(({ position }) => position),
       overlaps,
       clippedCardRows: cardRows.filter((box) => box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight).length,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards")].filter((element) => overlapsTable(element.getBoundingClientRect())).length,
+      contributionCentersInsideDraftOval,
       marketCards: document.querySelectorAll("#market-cards .playing-card").length,
       horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
     };
@@ -350,6 +361,8 @@ try {
     || sixPlayerLayout.positions.join(",") !== expectedSixPositions.join(",")
     || sixPlayerLayout.overlaps.length
     || sixPlayerLayout.clippedCardRows
+    || sixPlayerLayout.playerContentOnTable
+    || sixPlayerLayout.contributionCentersInsideDraftOval
     || sixPlayerLayout.marketCards !== 8
     || sixPlayerLayout.horizontalOverflow > 1) {
     throw new Error(`Six-player table is not fully visible: ${JSON.stringify(sixPlayerLayout)}`);
@@ -358,18 +371,52 @@ try {
   await sixPlayers[1].setViewportSize({ width: 390, height: 844 });
   await sixPlayers[1].evaluate(() => window.scrollTo(0, 0));
   await sixPlayers[1].waitForTimeout(200);
-  const sixPlayerMobileLayout = await sixPlayers[1].evaluate(() => ({
-    clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
+  const sixPlayerMobileLayout = await sixPlayers[1].evaluate(() => {
+    const table = document.querySelector(".poker-table").getBoundingClientRect();
+    const draftOval = document.querySelector(".draft-oval").getBoundingClientRect();
+    const overlapsTable = (box) => box.left < table.right && box.right > table.left && box.top < table.bottom && box.bottom > table.top;
+    const playerContent = [...document.querySelectorAll(".seat-shell, .seat-cards > *")].map((element) => ({
+      playerId: element.closest(".player-seat").dataset.playerId,
+      position: element.closest(".player-seat").dataset.position,
+      type: element.className,
+      box: element.getBoundingClientRect(),
+    }));
+    const playerContentOverlaps = [];
+    for (let left = 0; left < playerContent.length; left += 1) {
+      for (let right = left + 1; right < playerContent.length; right += 1) {
+        const a = playerContent[left];
+        const b = playerContent[right];
+        if (a.playerId !== b.playerId && a.box.left < b.box.right && a.box.right > b.box.left
+          && a.box.top < b.box.bottom && a.box.bottom > b.box.top) {
+          playerContentOverlaps.push(`${a.position} ${a.type}/${b.position} ${b.type}`);
+        }
+      }
+    }
+    const contributionCentersInsideDraftOval = [...document.querySelectorAll(".table-contribution")].filter((element) => {
+      const box = element.getBoundingClientRect();
+      const horizontalDistance = ((box.left + box.right) / 2 - (draftOval.left + draftOval.right) / 2) / (draftOval.width / 2);
+      const verticalDistance = ((box.top + box.bottom) / 2 - (draftOval.top + draftOval.bottom) / 2) / (draftOval.height / 2);
+      return horizontalDistance ** 2 + verticalDistance ** 2 < 1;
+    }).length;
+    return {
+      clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
       const box = row.getBoundingClientRect();
       return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
-    }).length,
-    clippedSeatShells: [...document.querySelectorAll(".seat-shell")].filter((shell) => {
-      const box = shell.getBoundingClientRect();
-      return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
-    }).length,
-    horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
-  }));
-  if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells || sixPlayerMobileLayout.horizontalOverflow > 1) {
+      }).length,
+      clippedSeatShells: [...document.querySelectorAll(".seat-shell")].filter((shell) => {
+        const box = shell.getBoundingClientRect();
+        return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
+      }).length,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlapsTable(element.getBoundingClientRect())).length,
+      playerContentOverlaps,
+      contributionCentersInsideDraftOval,
+      horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells
+    || sixPlayerMobileLayout.playerContentOnTable || sixPlayerMobileLayout.playerContentOverlaps.length
+    || sixPlayerMobileLayout.contributionCentersInsideDraftOval
+    || sixPlayerMobileLayout.horizontalOverflow > 1) {
     throw new Error(`Six-player mobile table is clipped: ${JSON.stringify(sixPlayerMobileLayout)}`);
   }
   await sixPlayers[1].screenshot({ path: "artifacts/game-six-player-mobile.png", fullPage: true });
@@ -455,12 +502,11 @@ try {
     logButtonHeight: document.querySelector("#log-toggle-button").getBoundingClientRect().height,
     logButtonFont: parseFloat(getComputedStyle(document.querySelector("#log-toggle-button")).fontSize),
     timerFont: parseFloat(getComputedStyle(document.querySelector("#turn-timer strong")).fontSize),
-    potLabelFont: parseFloat(getComputedStyle(document.querySelector(".pot-compact span")).fontSize),
-    potValueFont: parseFloat(getComputedStyle(document.querySelector(".pot-compact strong")).fontSize),
+    duplicatePotReadouts: document.querySelectorAll(".pot-compact").length,
   }));
   if (topControlSizes.seatButtonHeight < 36 || topControlSizes.seatButtonFont < 10
     || topControlSizes.logButtonHeight < 36 || topControlSizes.logButtonFont < 10
-    || topControlSizes.timerFont < 13 || topControlSizes.potLabelFont < 10 || topControlSizes.potValueFont < 17) {
+    || topControlSizes.timerFont < 13 || topControlSizes.duplicatePotReadouts) {
     throw new Error(`Top game controls are still too small: ${JSON.stringify(topControlSizes)}`);
   }
   const compactChrome = await host.evaluate(() => ({
@@ -596,6 +642,8 @@ try {
   }
   const tableClearance = await host.evaluate(() => {
     const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+    const table = rect(".poker-table");
+    const draftOval = rect(".draft-oval");
     const progress = rect("#phase-progress");
     const topSeat = rect('.player-seat[data-position="top"] .seat-shell');
     const bottomCards = rect('.player-seat[data-position="bottom"] .seat-cards');
@@ -604,6 +652,12 @@ try {
     const potValue = rect("#pot-stack b");
     const actionDock = rect("#action-dock");
     const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+    const contributionCentersInsideDraftOval = [...document.querySelectorAll(".table-contribution")].filter((element) => {
+      const box = element.getBoundingClientRect();
+      const horizontalDistance = ((box.left + box.right) / 2 - (draftOval.left + draftOval.right) / 2) / (draftOval.width / 2);
+      const verticalDistance = ((box.top + box.bottom) / 2 - (draftOval.top + draftOval.bottom) / 2) / (draftOval.height / 2);
+      return horizontalDistance ** 2 + verticalDistance ** 2 < 1;
+    }).length;
     return {
       progressBottom: progress.bottom,
       topSeatTop: topSeat.top,
@@ -611,6 +665,10 @@ try {
       actionDockTop: actionDock.top,
       contributionOverlapsPotValue: overlaps(bottomContribution, potValue),
       contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
+      bettingOvalVisible: getComputedStyle(document.querySelector(".betting-oval")).display !== "none",
+      draftOvalVisible: getComputedStyle(document.querySelector(".draft-oval")).display !== "none",
+      contributionCentersInsideDraftOval,
+      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
     };
   });
   if (tableClearance.topSeatTop < tableClearance.progressBottom + 8) {
@@ -621,6 +679,12 @@ try {
   }
   if (tableClearance.contributionOverlapsPotValue || tableClearance.contributionOverlapsBadges) {
     throw new Error(`Bottom contribution overlaps the pot value or seat badges: ${JSON.stringify(tableClearance)}`);
+  }
+  if (!tableClearance.bettingOvalVisible || !tableClearance.draftOvalVisible || tableClearance.contributionCentersInsideDraftOval) {
+    throw new Error(`Draft and betting table zones are not separated: ${JSON.stringify(tableClearance)}`);
+  }
+  if (tableClearance.playerContentOnTable) {
+    throw new Error(`Player hands or seats overlap the felt: ${JSON.stringify(tableClearance)}`);
   }
   await host.screenshot({ path: "artifacts/game-draft-desktop.png" });
   await host.evaluate(() => { window.__playedAudio = []; });
@@ -679,6 +743,10 @@ try {
       horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
       dockHeight: document.querySelector("#action-dock").getBoundingClientRect().height,
       bettingIndicatorVisible: getComputedStyle(document.querySelector(".market-title")).display !== "none",
+      bettingOvalVisible: getComputedStyle(document.querySelector(".betting-oval")).display !== "none",
+      draftOvalVisible: getComputedStyle(document.querySelector(".draft-oval")).display !== "none",
+      draftOrderVisible: getComputedStyle(document.querySelector("#draft-order")).display !== "none",
+      draftTokenStacks: document.querySelectorAll(".table-contribution .tokens").length,
       contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
       contributionOverlapsTitle: contribution.left < marketTitle.right
         && contribution.right > marketTitle.left
@@ -687,6 +755,8 @@ try {
     };
   });
   if (mobileLayout.horizontalOverflow > 1 || mobileLayout.dockHeight > 150 || mobileLayout.bettingIndicatorVisible
+    || !mobileLayout.bettingOvalVisible || mobileLayout.draftOvalVisible || mobileLayout.draftOrderVisible
+    || mobileLayout.draftTokenStacks
     || mobileLayout.contributionOverlapsBadges || mobileLayout.contributionOverlapsTitle) {
     throw new Error(`Mobile betting layout is not compact and clear: ${JSON.stringify(mobileLayout)}`);
   }
@@ -707,6 +777,7 @@ try {
       const bottomContribution = rect('.table-contribution[data-position="bottom"] .poker-chip-pile');
       const bottomBadges = rect('.player-seat[data-position="bottom"] .seat-badges');
       const dock = rect("#action-dock");
+      const table = rect(".poker-table");
       const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
       return {
         name,
@@ -715,6 +786,7 @@ try {
         topSeatClipped: topSeat.top < topbar.bottom - 1,
         bottomCardsClipped: bottomCards.bottom > dock.top + 1,
         contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
+        playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
         dockClipped: dock.bottom > innerHeight + 1,
       };
     }, viewport));
@@ -724,7 +796,7 @@ try {
   }
   const responsiveFailure = responsiveLayouts.find((layout) => layout.horizontalOverflow > 1
     || layout.verticalOverflow > 1 || layout.topSeatClipped || layout.bottomCardsClipped
-    || layout.contributionOverlapsBadges || layout.dockClipped);
+    || layout.contributionOverlapsBadges || layout.playerContentOnTable || layout.dockClipped);
   if (responsiveFailure) {
     throw new Error(`Game does not fit a supported viewport: ${JSON.stringify(responsiveLayouts)}`);
   }
@@ -764,13 +836,14 @@ try {
     const resultPanel = document.querySelector("#action-dock").getBoundingClientRect();
     return {
       draftOrderVisible: getComputedStyle(draftOrder).display !== "none",
+      draftOvalVisible: getComputedStyle(document.querySelector(".draft-oval")).display !== "none",
       bottomCardsOverlapWinner: bottomCards.left < resultPanel.right
         && bottomCards.right > resultPanel.left
         && bottomCards.top < resultPanel.bottom
         && bottomCards.bottom > resultPanel.top,
     };
   })));
-  if (resultLayouts.some(({ draftOrderVisible, bottomCardsOverlapWinner }) => draftOrderVisible || bottomCardsOverlapWinner)) {
+  if (resultLayouts.some(({ draftOrderVisible, draftOvalVisible, bottomCardsOverlapWinner }) => draftOrderVisible || draftOvalVisible || bottomCardsOverlapWinner)) {
     throw new Error(`Winner banner overlaps the completed-hand table: ${JSON.stringify(resultLayouts)}`);
   }
   const payoutFeedback = await host.evaluate(() => ({

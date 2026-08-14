@@ -203,6 +203,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Never place timer text over the table; keep the top timer and active-avatar ring green above 50%, yellow at 50% remaining, and red for the final three seconds.
 - Keep guidance supporting copy at least 15px on desktop and section summaries at least 17px; compact game-table typography does not apply to the help panel.
 - Keep table contribution chip values clear of the total-pot readout and seat badges, and use the active-avatar ring instead of a center Poker turn indicator.
+- Keep player seat panels and hand cards outside the felt; only the card market, player contributions, and center pot belong on the table, and never duplicate the pot in the top controls.
+- Divide the felt into a persistent outer betting oval and a temporary inner Draft oval; hide the inner oval, Draft order, market prompt, and spent-token markers when Poker betting begins.
 - Keep the table, seats, cards, and action dock inside supported 320x568-and-larger viewports without requiring browser zoom or fullscreen.
 - A socket belongs to one room: connect to `/room/new` to create or `/room/CODE` to join, and never auto-replay `create_room` or `join_room` on reconnect — only `resume`.
 - Pixel thresholds in `scripts/ui-smoke.mjs` shift with the browser's font metrics; confirm a layout failure against unmodified `main` in the same browser before treating it as a regression.

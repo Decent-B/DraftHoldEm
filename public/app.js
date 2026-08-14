@@ -431,6 +431,7 @@ function contributionStack(type, amount, label, animate) {
 function renderTableContributions(state) {
   const game = state.game;
   const viewer = game.players.find((player) => player.id === state.viewerId);
+  const draftActive = game.phase === "DRAFT_BIDDING" || game.phase === "DRAFT_PICKING";
   const initialSecretBid = game.phase === "DRAFT_BIDDING" && game.draftBidStage === "INITIAL";
   const tieBreakBid = game.phase === "DRAFT_BIDDING" && game.draftBidStage === "TIEBREAK";
 
@@ -451,7 +452,7 @@ function renderTableContributions(state) {
     if (initialSecretBid && player.draftBidLocked) {
       const ownBid = player.id === state.viewerId ? player.currentDraftBid : "?";
       stacks.push(contributionStack("tokens secret", ownBid, "LOCKED BID", !previousPlayer?.draftBidLocked));
-    } else if (player.draftSpentThisRound > 0) {
+    } else if (draftActive && player.draftSpentThisRound > 0) {
       stacks.push(contributionStack(
         "tokens",
         player.draftSpentThisRound,
@@ -510,7 +511,6 @@ function renderGame(state) {
     ? "DRAFT · TIE-BREAK"
     : phaseNames[game.phase] ?? game.phase;
   $("#phase-label").style.color = game.phase === "POKER_BETTING" ? "var(--red)" : game.phase === "HAND_COMPLETE" ? "var(--gold)" : "var(--cyan)";
-  $("#pot-label").textContent = game.pot;
   $("#market-instruction").textContent = marketDescription(game);
   $("#market-kicker").textContent = game.phase === "POKER_BETTING" ? `CURRENT BET · ${game.betting?.currentBet ?? 0}` : "CARD MARKET";
   $("#phase-progress").innerHTML = [1, 2, 3, 4].map((round) => `<i class="${round < game.round ? "done" : round === game.round ? "current" : ""}"></i>`).join("");
@@ -525,7 +525,7 @@ function renderGame(state) {
   })).join("");
 
   const order = $("#draft-order");
-  if (game.pickOrder.length && game.phase !== "HAND_COMPLETE") {
+  if (game.pickOrder.length && game.phase === "DRAFT_PICKING") {
     order.classList.remove("hidden");
     order.innerHTML = game.pickOrder.map((id, index) => {
       const player = game.players.find((candidate) => candidate.id === id);
