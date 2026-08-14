@@ -322,7 +322,6 @@ try {
   const sixPlayerLayout = await sixPlayers[0].evaluate(() => {
     const seats = [...document.querySelectorAll(".player-seat")];
     const table = document.querySelector(".poker-table").getBoundingClientRect();
-    const draftOval = document.querySelector(".draft-oval").getBoundingClientRect();
     const rects = seats.map((seat) => {
       const box = seat.getBoundingClientRect();
       return { position: seat.dataset.position, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
@@ -339,19 +338,12 @@ try {
     }
     const cardRows = [...document.querySelectorAll(".seat-cards")].map((row) => row.getBoundingClientRect());
     const overlapsTable = (box) => box.left < table.right && box.right > table.left && box.top < table.bottom && box.bottom > table.top;
-    const contributionCentersInsideDraftOval = [...document.querySelectorAll(".table-contribution")].filter((element) => {
-      const box = element.getBoundingClientRect();
-      const horizontalDistance = ((box.left + box.right) / 2 - (draftOval.left + draftOval.right) / 2) / (draftOval.width / 2);
-      const verticalDistance = ((box.top + box.bottom) / 2 - (draftOval.top + draftOval.bottom) / 2) / (draftOval.height / 2);
-      return horizontalDistance ** 2 + verticalDistance ** 2 < 1;
-    }).length;
     return {
       count: seats.length,
       positions: rects.map(({ position }) => position),
       overlaps,
       clippedCardRows: cardRows.filter((box) => box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight).length,
       playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards")].filter((element) => overlapsTable(element.getBoundingClientRect())).length,
-      contributionCentersInsideDraftOval,
       marketCards: document.querySelectorAll("#market-cards .playing-card").length,
       horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
     };
@@ -362,7 +354,6 @@ try {
     || sixPlayerLayout.overlaps.length
     || sixPlayerLayout.clippedCardRows
     || sixPlayerLayout.playerContentOnTable
-    || sixPlayerLayout.contributionCentersInsideDraftOval
     || sixPlayerLayout.marketCards !== 8
     || sixPlayerLayout.horizontalOverflow > 1) {
     throw new Error(`Six-player table is not fully visible: ${JSON.stringify(sixPlayerLayout)}`);
@@ -373,7 +364,6 @@ try {
   await sixPlayers[1].waitForTimeout(200);
   const sixPlayerMobileLayout = await sixPlayers[1].evaluate(() => {
     const table = document.querySelector(".poker-table").getBoundingClientRect();
-    const draftOval = document.querySelector(".draft-oval").getBoundingClientRect();
     const overlapsTable = (box) => box.left < table.right && box.right > table.left && box.top < table.bottom && box.bottom > table.top;
     const playerContent = [...document.querySelectorAll(".seat-shell, .seat-cards > *")].map((element) => ({
       playerId: element.closest(".player-seat").dataset.playerId,
@@ -392,12 +382,6 @@ try {
         }
       }
     }
-    const contributionCentersInsideDraftOval = [...document.querySelectorAll(".table-contribution")].filter((element) => {
-      const box = element.getBoundingClientRect();
-      const horizontalDistance = ((box.left + box.right) / 2 - (draftOval.left + draftOval.right) / 2) / (draftOval.width / 2);
-      const verticalDistance = ((box.top + box.bottom) / 2 - (draftOval.top + draftOval.bottom) / 2) / (draftOval.height / 2);
-      return horizontalDistance ** 2 + verticalDistance ** 2 < 1;
-    }).length;
     return {
       clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
       const box = row.getBoundingClientRect();
@@ -409,13 +393,11 @@ try {
       }).length,
       playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlapsTable(element.getBoundingClientRect())).length,
       playerContentOverlaps,
-      contributionCentersInsideDraftOval,
       horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
     };
   });
   if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells
     || sixPlayerMobileLayout.playerContentOnTable || sixPlayerMobileLayout.playerContentOverlaps.length
-    || sixPlayerMobileLayout.contributionCentersInsideDraftOval
     || sixPlayerMobileLayout.horizontalOverflow > 1) {
     throw new Error(`Six-player mobile table is clipped: ${JSON.stringify(sixPlayerMobileLayout)}`);
   }
@@ -600,6 +582,22 @@ try {
   if ((await guest.locator('.table-contribution[data-position="top"] .tokens.secret b').innerText()).trim() !== "?") {
     throw new Error("A secret opponent bid amount was revealed on the table");
   }
+  const draftChipVisual = await host.locator('.table-contribution[data-position="bottom"] .tokens.secret').evaluate((element) => {
+    const chip = element.querySelector(".contribution-pieces");
+    const containerStyle = getComputedStyle(element);
+    const chipStyle = getComputedStyle(chip);
+    return {
+      containerBackground: containerStyle.backgroundColor,
+      containerBorderWidth: parseFloat(containerStyle.borderTopWidth),
+      chipWidth: chip.getBoundingClientRect().width,
+      chipHeight: chip.getBoundingClientRect().height,
+      chipTransform: chipStyle.transform,
+    };
+  });
+  if (draftChipVisual.containerBackground !== "rgba(0, 0, 0, 0)" || draftChipVisual.containerBorderWidth !== 0
+    || draftChipVisual.chipWidth < 29 || draftChipVisual.chipHeight < 29 || draftChipVisual.chipTransform === "none") {
+    throw new Error(`Draft Token contribution is not a standalone diamond chip: ${JSON.stringify(draftChipVisual)}`);
+  }
   await guest.waitForSelector("#lock-bid-button");
   await guest.fill("#bid-number", "2");
   await guest.click("#lock-bid-button");
@@ -643,7 +641,6 @@ try {
   const tableClearance = await host.evaluate(() => {
     const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
     const table = rect(".poker-table");
-    const draftOval = rect(".draft-oval");
     const progress = rect("#phase-progress");
     const topSeat = rect('.player-seat[data-position="top"] .seat-shell');
     const bottomCards = rect('.player-seat[data-position="bottom"] .seat-cards');
@@ -652,12 +649,6 @@ try {
     const potValue = rect("#pot-stack b");
     const actionDock = rect("#action-dock");
     const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
-    const contributionCentersInsideDraftOval = [...document.querySelectorAll(".table-contribution")].filter((element) => {
-      const box = element.getBoundingClientRect();
-      const horizontalDistance = ((box.left + box.right) / 2 - (draftOval.left + draftOval.right) / 2) / (draftOval.width / 2);
-      const verticalDistance = ((box.top + box.bottom) / 2 - (draftOval.top + draftOval.bottom) / 2) / (draftOval.height / 2);
-      return horizontalDistance ** 2 + verticalDistance ** 2 < 1;
-    }).length;
     return {
       progressBottom: progress.bottom,
       topSeatTop: topSeat.top,
@@ -665,9 +656,7 @@ try {
       actionDockTop: actionDock.top,
       contributionOverlapsPotValue: overlaps(bottomContribution, potValue),
       contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
-      bettingOvalVisible: getComputedStyle(document.querySelector(".betting-oval")).display !== "none",
-      draftOvalVisible: getComputedStyle(document.querySelector(".draft-oval")).display !== "none",
-      contributionCentersInsideDraftOval,
+      ovalIndicators: document.querySelectorAll(".betting-oval, .draft-oval").length,
       playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
     };
   });
@@ -680,8 +669,8 @@ try {
   if (tableClearance.contributionOverlapsPotValue || tableClearance.contributionOverlapsBadges) {
     throw new Error(`Bottom contribution overlaps the pot value or seat badges: ${JSON.stringify(tableClearance)}`);
   }
-  if (!tableClearance.bettingOvalVisible || !tableClearance.draftOvalVisible || tableClearance.contributionCentersInsideDraftOval) {
-    throw new Error(`Draft and betting table zones are not separated: ${JSON.stringify(tableClearance)}`);
+  if (tableClearance.ovalIndicators) {
+    throw new Error(`Table still contains oval indicators: ${JSON.stringify(tableClearance)}`);
   }
   if (tableClearance.playerContentOnTable) {
     throw new Error(`Player hands or seats overlap the felt: ${JSON.stringify(tableClearance)}`);
@@ -743,8 +732,6 @@ try {
       horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
       dockHeight: document.querySelector("#action-dock").getBoundingClientRect().height,
       bettingIndicatorVisible: getComputedStyle(document.querySelector(".market-title")).display !== "none",
-      bettingOvalVisible: getComputedStyle(document.querySelector(".betting-oval")).display !== "none",
-      draftOvalVisible: getComputedStyle(document.querySelector(".draft-oval")).display !== "none",
       draftOrderVisible: getComputedStyle(document.querySelector("#draft-order")).display !== "none",
       draftTokenStacks: document.querySelectorAll(".table-contribution .tokens").length,
       contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
@@ -755,7 +742,7 @@ try {
     };
   });
   if (mobileLayout.horizontalOverflow > 1 || mobileLayout.dockHeight > 150 || mobileLayout.bettingIndicatorVisible
-    || !mobileLayout.bettingOvalVisible || mobileLayout.draftOvalVisible || mobileLayout.draftOrderVisible
+    || mobileLayout.draftOrderVisible
     || mobileLayout.draftTokenStacks
     || mobileLayout.contributionOverlapsBadges || mobileLayout.contributionOverlapsTitle) {
     throw new Error(`Mobile betting layout is not compact and clear: ${JSON.stringify(mobileLayout)}`);
@@ -836,14 +823,13 @@ try {
     const resultPanel = document.querySelector("#action-dock").getBoundingClientRect();
     return {
       draftOrderVisible: getComputedStyle(draftOrder).display !== "none",
-      draftOvalVisible: getComputedStyle(document.querySelector(".draft-oval")).display !== "none",
       bottomCardsOverlapWinner: bottomCards.left < resultPanel.right
         && bottomCards.right > resultPanel.left
         && bottomCards.top < resultPanel.bottom
         && bottomCards.bottom > resultPanel.top,
     };
   })));
-  if (resultLayouts.some(({ draftOrderVisible, draftOvalVisible, bottomCardsOverlapWinner }) => draftOrderVisible || draftOvalVisible || bottomCardsOverlapWinner)) {
+  if (resultLayouts.some(({ draftOrderVisible, bottomCardsOverlapWinner }) => draftOrderVisible || bottomCardsOverlapWinner)) {
     throw new Error(`Winner banner overlaps the completed-hand table: ${JSON.stringify(resultLayouts)}`);
   }
   const payoutFeedback = await host.evaluate(() => ({
