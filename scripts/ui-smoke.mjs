@@ -383,6 +383,8 @@ try {
       }
     }
     return {
+      tableWidth: table.width,
+      tableHeight: table.height,
       clippedCardRows: [...document.querySelectorAll(".seat-cards")].filter((row) => {
       const box = row.getBoundingClientRect();
       return box.left < 0 || box.right > innerWidth || box.top < 0 || box.bottom > innerHeight;
@@ -398,7 +400,8 @@ try {
   });
   if (sixPlayerMobileLayout.clippedCardRows || sixPlayerMobileLayout.clippedSeatShells
     || sixPlayerMobileLayout.playerContentOnTable || sixPlayerMobileLayout.playerContentOverlaps.length
-    || sixPlayerMobileLayout.horizontalOverflow > 1) {
+    || sixPlayerMobileLayout.horizontalOverflow > 1 || sixPlayerMobileLayout.tableWidth > 279
+    || sixPlayerMobileLayout.tableHeight > 271) {
     throw new Error(`Six-player mobile table is clipped: ${JSON.stringify(sixPlayerMobileLayout)}`);
   }
   await sixPlayers[1].screenshot({ path: "artifacts/game-six-player-mobile.png", fullPage: true });
@@ -748,8 +751,11 @@ try {
     throw new Error(`Mobile betting layout is not compact and clear: ${JSON.stringify(mobileLayout)}`);
   }
   const responsiveViewports = [
-    { width: 320, height: 568, name: "small-phone", maxCardWidth: 46 },
-    { width: 667, height: 375, name: "phone-landscape", maxCardWidth: 40 },
+    { width: 320, height: 568, name: "small-phone", maxCardWidth: 46, requirePotClear: true, requireTableEdges: true },
+    { width: 375, height: 812, name: "phone-portrait", maxCardWidth: 46, maxTableWidth: 264, maxTableHeight: 261, requirePotClear: true, requireTableEdges: true },
+    { width: 414, height: 896, name: "iphone-xr-portrait", maxCardWidth: 48, maxTableWidth: 318, maxTableHeight: 261, requirePotClear: true, requireTableEdges: true },
+    { width: 667, height: 375, name: "phone-landscape", maxCardWidth: 40, requirePotClear: true, requireTableEdges: true, requireSideStations: true },
+    { width: 896, height: 414, name: "iphone-xr-landscape", maxCardWidth: 40, requirePotClear: true, requireTableEdges: true, requireSideStations: true },
     { width: 768, height: 600, name: "compact-tablet" },
     { width: 1024, height: 600, name: "compact-laptop" },
   ];
@@ -757,7 +763,7 @@ try {
   for (const viewport of responsiveViewports) {
     await guest.setViewportSize(viewport);
     await guest.waitForTimeout(100);
-    responsiveLayouts.push(await guest.evaluate(({ name, maxCardWidth }) => {
+    responsiveLayouts.push(await guest.evaluate(({ name, maxCardWidth, maxTableWidth, maxTableHeight, requirePotClear, requireTableEdges, requireSideStations }) => {
       const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
       const topbar = rect(".topbar");
       const roundStrip = rect(".round-strip");
@@ -769,6 +775,10 @@ try {
       const bottomBadges = rect('.player-seat[data-position="bottom"] .seat-badges');
       const dock = rect("#action-dock");
       const table = rect(".poker-table");
+      const tableWrap = rect(".table-wrap");
+      const topStationContent = [...document.querySelectorAll('.player-seat[data-position="top"] .seat-shell, .player-seat[data-position="top"] .seat-cards > *')].map((element) => element.getBoundingClientRect());
+      const bottomStationContent = [...document.querySelectorAll('.player-seat[data-position="bottom"] .seat-shell, .player-seat[data-position="bottom"] .seat-cards > *')].map((element) => element.getBoundingClientRect());
+      const pot = rect("#pot-stack");
       const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
       return {
         name,
@@ -778,7 +788,12 @@ try {
         topBadgesCovered: topBadges.top < roundStrip.bottom + 1,
         bottomCardsClipped: bottomCards.bottom > dock.top + 1,
         cardTooWide: maxCardWidth ? bottomCard.width > maxCardWidth : false,
+        tableTooLarge: (maxTableWidth && table.width > maxTableWidth) || (maxTableHeight && table.height > maxTableHeight),
+        tableEdgeClipped: requireTableEdges && (table.left < tableWrap.left + 22 || table.right > tableWrap.right - 22),
+        sideStationsWrong: requireSideStations && (Math.max(...topStationContent.map((box) => box.right)) > table.left - 4
+          || Math.min(...bottomStationContent.map((box) => box.left)) < table.right + 4),
         contributionOverlapsBadges: overlaps(bottomContribution, bottomBadges),
+        contributionOverlapsPot: requirePotClear && [...document.querySelectorAll(".table-contribution")].some((contribution) => overlaps(contribution.getBoundingClientRect(), pot)),
         playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
         dockClipped: dock.bottom > innerHeight + 1,
       };
@@ -789,8 +804,10 @@ try {
   }
   const responsiveFailure = responsiveLayouts.find((layout) => layout.horizontalOverflow > 1
     || layout.verticalOverflow > 1 || layout.topSeatClipped || layout.topBadgesCovered
-    || layout.bottomCardsClipped || layout.cardTooWide
-    || layout.contributionOverlapsBadges || layout.playerContentOnTable || layout.dockClipped);
+    || layout.bottomCardsClipped || layout.cardTooWide || layout.tableTooLarge
+    || layout.tableEdgeClipped || layout.sideStationsWrong
+    || layout.contributionOverlapsBadges || layout.contributionOverlapsPot
+    || layout.playerContentOnTable || layout.dockClipped);
   if (responsiveFailure) {
     throw new Error(`Game does not fit a supported viewport: ${JSON.stringify(responsiveLayouts)}`);
   }
@@ -803,37 +820,42 @@ try {
   await host.fill("#bid-number", "0");
   await host.click("#lock-bid-button");
   await guest.waitForSelector("#lock-bid-button");
-  await guest.setViewportSize({ width: 667, height: 375 });
-  await guest.waitForTimeout(100);
-  const draftLandscapeLayout = await guest.evaluate(() => {
-    const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
-    const table = rect(".poker-table");
-    const roundStrip = rect(".round-strip");
-    const topBadges = rect('.player-seat[data-position="top"] .seat-badges');
-    const dock = rect("#action-dock");
-    const market = rect("#market-cards");
-    const pot = rect("#pot-stack");
-    const cards = [...document.querySelectorAll("#market-cards .playing-card")].map((card) => card.getBoundingClientRect());
-    const contributions = [...document.querySelectorAll(".table-contribution")].map((contribution) => contribution.getBoundingClientRect());
-    const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
-    return {
-      horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
-      verticalOverflow: document.documentElement.scrollHeight - innerHeight,
-      topBadgesCovered: topBadges.top < roundStrip.bottom + 1,
-      dockClipped: dock.bottom > innerHeight + 1,
-      cardsOutsideTable: cards.filter((card) => card.left < table.left || card.right > table.right || card.top < table.top || card.bottom > table.bottom).length,
-      contributionsOverlapCenter: contributions.filter((contribution) => overlaps(contribution, market) || overlaps(contribution, pot)).length,
-      playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
-      widestCard: Math.max(...cards.map((card) => card.width)),
-    };
-  });
-  if (draftLandscapeLayout.horizontalOverflow > 1 || draftLandscapeLayout.verticalOverflow > 1
-    || draftLandscapeLayout.topBadgesCovered || draftLandscapeLayout.dockClipped
-    || draftLandscapeLayout.cardsOutsideTable || draftLandscapeLayout.contributionsOverlapCenter
-    || draftLandscapeLayout.playerContentOnTable || draftLandscapeLayout.widestCard > 40) {
-    throw new Error(`Landscape Draft layout is not playable: ${JSON.stringify(draftLandscapeLayout)}`);
+  for (const draftViewport of [
+    { width: 667, height: 375, name: "phone-landscape" },
+    { width: 896, height: 414, name: "iphone-xr-landscape" },
+  ]) {
+    await guest.setViewportSize(draftViewport);
+    await guest.waitForTimeout(100);
+    const draftLandscapeLayout = await guest.evaluate(() => {
+      const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const table = rect(".poker-table");
+      const roundStrip = rect(".round-strip");
+      const topBadges = rect('.player-seat[data-position="top"] .seat-badges');
+      const dock = rect("#action-dock");
+      const market = rect("#market-cards");
+      const pot = rect("#pot-stack");
+      const cards = [...document.querySelectorAll("#market-cards .playing-card")].map((card) => card.getBoundingClientRect());
+      const contributions = [...document.querySelectorAll(".table-contribution")].map((contribution) => contribution.getBoundingClientRect());
+      const overlaps = (left, right) => left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+      return {
+        horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+        verticalOverflow: document.documentElement.scrollHeight - innerHeight,
+        topBadgesCovered: topBadges.top < roundStrip.bottom + 1,
+        dockClipped: dock.bottom > innerHeight + 1,
+        cardsOutsideTable: cards.filter((card) => card.left < table.left || card.right > table.right || card.top < table.top || card.bottom > table.bottom).length,
+        contributionsOverlapCenter: contributions.filter((contribution) => overlaps(contribution, market) || overlaps(contribution, pot)).length,
+        playerContentOnTable: [...document.querySelectorAll(".seat-shell, .seat-cards > *")].filter((element) => overlaps(element.getBoundingClientRect(), table)).length,
+        widestCard: Math.max(...cards.map((card) => card.width)),
+      };
+    });
+    if (draftLandscapeLayout.horizontalOverflow > 1 || draftLandscapeLayout.verticalOverflow > 1
+      || draftLandscapeLayout.topBadgesCovered || draftLandscapeLayout.dockClipped
+      || draftLandscapeLayout.cardsOutsideTable || draftLandscapeLayout.contributionsOverlapCenter
+      || draftLandscapeLayout.playerContentOnTable || draftLandscapeLayout.widestCard > 40) {
+      throw new Error(`Landscape Draft layout is not playable at ${draftViewport.name}: ${JSON.stringify(draftLandscapeLayout)}`);
+    }
+    await guest.screenshot({ path: `artifacts/game-draft-${draftViewport.name}.png` });
   }
-  await guest.screenshot({ path: "artifacts/game-draft-phone-landscape.png" });
   await guest.setViewportSize({ width: 390, height: 844 });
   await guest.fill("#bid-number", "0");
   await guest.click("#lock-bid-button");
