@@ -257,6 +257,9 @@ export class DraftHoldemGame {
     }
     this.smallBlindSeatIndex = smallBlindPlayer.seatIndex;
     this.bigBlindSeatIndex = bigBlindPlayer.seatIndex;
+    this.dealerSeatIndex = this.playerCountAtStart === 2
+      ? smallBlindPlayer.seatIndex
+      : this.previousSeat(smallBlindPlayer.seatIndex, inHand).seatIndex;
     const layout = marketLayout(this.playerCountAtStart, round);
     this.market = [];
     for (let index = 0; index < layout.total; index += 1) {

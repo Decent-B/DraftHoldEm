@@ -210,6 +210,28 @@ test("six-player games deal an eight-card market and act after the big blind", (
   assert.equal(game.betting.actingPlayerId, "utg");
 });
 
+test("three-player positions rotate together each Draft round", () => {
+  const game = new DraftHoldemGame([
+    { id: "a", name: "A" },
+    { id: "b", name: "B" },
+    { id: "c", name: "C" },
+  ]);
+  const rounds = [
+    { dealer: "a", smallBlind: "b", bigBlind: "c" },
+    { dealer: "b", smallBlind: "c", bigBlind: "a" },
+    { dealer: "c", smallBlind: "a", bigBlind: "b" },
+    { dealer: "a", smallBlind: "b", bigBlind: "c" },
+  ];
+
+  for (const [index, expected] of rounds.entries()) {
+    assert.equal(game.players.find((player) => player.seatIndex === game.dealerSeatIndex).id, expected.dealer, `round ${index + 1} dealer`);
+    assert.equal(game.players.find((player) => player.seatIndex === game.smallBlindSeatIndex).id, expected.smallBlind, `round ${index + 1} small blind`);
+    assert.equal(game.players.find((player) => player.seatIndex === game.bigBlindSeatIndex).id, expected.bigBlind, `round ${index + 1} big blind`);
+    completeDraft(game);
+    if (index < rounds.length - 1) game.finishBettingStreet();
+  }
+});
+
 test("four-player positions rotate clockwise together each Draft round", () => {
   const game = new DraftHoldemGame([
     { id: "c", name: "C" },
